@@ -1,33 +1,54 @@
-# VaultCompute
+# New Banking App
 
-A desktop personal-finance app for tracking accounts, transactions, and cash flow. Built with Electron, VaultCompute keeps data locally on the computer rather than requiring an online account.
+A private desktop budgeting app for tracking accounts, transactions, and cash flow without sending your financial data to a remote service.
+
+This project is also referred to as `VaultCompute` in the app interface and documentation.
+
+## Overview
+
+New Banking App is a local-first personal finance dashboard built with Electron. It helps you:
+
+- monitor balances across multiple accounts
+- add and manage transactions manually
+- import bank statements from CSV, QFX, and OFX files
+- review income and spending by category
+- keep all financial data stored on your own machine
 
 ## Features
 
-- Add and manage checking, savings, and credit-card accounts.
-- Select an account in the sidebar to view only its transactions, or choose **All accounts** for the complete register.
-- Add, edit, and remove transactions.
-- Track spending, income, account balances, total cash, debt, and net worth.
-- Import transaction data from CSV, QFX, and OFX bank-statement files.
-- View income, spending, and net-cash-flow reports for a chosen date range.
-- Opens maximized with standard window controls.
+- Clear snapshot of total cash, debt, and net worth
+- Multi-account support for checking, savings, and credit-card accounts
+- Transaction register with dates, payees, categories, memos, and cleared status
+- Spending and income tracking with category totals
+- Import support for common bank statement formats
+- Duplicate detection while importing transactions
+- Local-only storage in the app data directory for privacy
+
+## Prerequisites
+
+Install [Node.js](https://nodejs.org/) and use the current LTS version. `npm` is included with Node.js.
 
 ## Getting started
 
-### Requirements
+1. Clone this repository or download it as a ZIP file and extract it.
+2. Open a terminal in the project directory.
+3. Install dependencies:
 
-- [Node.js](https://nodejs.org/) (LTS recommended)
+   ```bash
+   npm install
+   ```
 
-### Install and run
+4. Start the app:
 
-```bash
-npm install
-npm start
-```
+   ```bash
+   npm start
+   ```
 
-## Development checks
+On first launch, the app creates sample account data so you can explore the interface immediately. You can replace or customize those entries from inside the app.
 
-Run the JavaScript syntax check before committing changes:
+## Development check
+
+Run a basic JavaScript syntax validation before committing changes:
 
 ```bash
 npm run check
@@ -37,22 +58,24 @@ npm run check
 
 ```text
 .
-├── main.js          # Electron main process and local data access
-├── preload.js       # Secure renderer-to-main IPC bridge
+├── main.js              # Electron main process and local persistence logic
+├── preload.js           # Safe bridge between the renderer and main process
 ├── src/
-│   ├── index.html   # App layout
-│   ├── renderer.js  # User interface and finance logic
-│   └── style.css    # App styles
-├── package.json
-└── ideas for project.txt
+│   ├── index.html       # App layout and UI structure
+│   ├── renderer.js      # Financial logic and UI behavior
+│   └── style.css        # Styling and layout
+├── package.json         # Scripts and dependencies
+├── README.md            # Project overview and usage guide
+├── .electron-data/      # Local app data for development
+└── node_modules/        # Installed dependencies
 ```
 
-## Data and privacy
+## Privacy and data storage
 
-Account and transaction data is saved locally in Electron's application-data folder as `vault_data.json`. The `.electron-data/` development folder and `node_modules/` are excluded from Git.
+Financial data is stored locally in Electron's application-data directory as `vault_data.json` and related app files. The project intentionally avoids cloud syncing and remote account access.
 
-> This is a personal budgeting tool, not a bank or financial institution. Keep backups of any financial data you rely on.
+> This is a personal budgeting tool, not a bank or financial institution.
 
 ## License
 
-This project is licensed under the ISC License. See `package.json` for details.
+ISC
