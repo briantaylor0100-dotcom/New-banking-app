@@ -1,0 +1,28 @@
+Invoices
+
+incomes
+	wages & salary 
+	retirement/ssi
+total $
+
+spending 
+	automobile
+		gasoline
+		maintenance
+		rental
+	total
+
+	bills
+		electricity/gas
+		mortage
+		membership/sams club
+	total
+
+	food 
+		dining out
+		groceries
+	total
+
+	and so on with each category
+
+then grand total

@@ -1,0 +1,17 @@
+{
+  "name": "new-banking-app",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "set ELECTRON_RUN_AS_NODE=&& electron --in-process-gpu --disable-gpu --disable-software-rasterizer --password-store=basic --user-data-dir=.electron-data .",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "electron": "^42.0.0"
+  }
+}
