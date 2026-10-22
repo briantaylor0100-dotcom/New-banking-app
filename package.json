@@ -4,8 +4,9 @@
   "description": "",
   "main": "main.js",
   "scripts": {
-    "start": "set ELECTRON_RUN_AS_NODE=&& electron --in-process-gpu --disable-gpu --disable-software-rasterizer --password-store=basic --user-data-dir=.electron-data .",
-    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js"
+    "start": "node scripts/start.js",
+    "check": "node --check main.js && node --check preload.js && node --check src/renderer.js",
+    "postinstall": "node node_modules/electron/install.js"
   },
   "keywords": [],
   "author": "",

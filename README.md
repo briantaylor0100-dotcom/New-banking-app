@@ -22,6 +22,7 @@ New Banking App is a local-first personal finance dashboard built with Electron.
 - Spending and income tracking with category totals
 - Import support for common bank statement formats
 - Duplicate detection while importing transactions
+- Split incoming deposits across recipients and categories while counting the deposit once
 - Local-only storage in the app data directory for privacy
 
 ## Prerequisites

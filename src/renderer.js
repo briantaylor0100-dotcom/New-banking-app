@@ -7,6 +7,7 @@ const DEFAULT_CATEGORY_TYPES = {
 let state = { accounts: [], transactions: [], categoryTypes: DEFAULT_CATEGORY_TYPES, planning: { safetyBuffer: 0, goalReserve: 0 }, importTemplates: [] };
 let selectedAccountId = null;
 let pendingImport = null;
+let openSplitTransactionId = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
 const reportsPage = document.getElementById('reports-page');
@@ -85,6 +86,35 @@ function categorySelect(value) {
     select.append(group);
   });
   return select;
+}
+function splitTotalCents(tx) { return Math.round(amount(tx.receive) * 100); }
+function renderSplitRows(tx) {
+  const holder = document.getElementById('split-rows');
+  holder.replaceChildren();
+  const rows = Array.isArray(tx.splits) && tx.splits.length
+    ? tx.splits
+    : [{ payee: tx.payee, category: tx.category || 'Uncategorized', amount: amount(tx.receive) }];
+  rows.forEach(split => {
+    const row = document.createElement('div'); row.className = 'split-input-row';
+    const payee = document.createElement('input'); payee.type = 'text'; payee.maxLength = 80; payee.placeholder = 'e.g. Alex'; payee.value = safeText(split.payee); payee.setAttribute('aria-label', 'Person or source');
+    const category = categorySelect(split.category || 'Uncategorized'); category.setAttribute('aria-label', 'Category');
+    const value = document.createElement('input'); value.type = 'number'; value.min = '0.01'; value.step = '0.01'; value.inputMode = 'decimal'; value.value = amount(split.amount).toFixed(2); value.className = 'split-amount'; value.setAttribute('aria-label', 'Amount');
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'remove-split-btn'; remove.textContent = 'Remove'; remove.addEventListener('click', () => { row.remove(); updateSplitRemainder(); });
+    value.addEventListener('input', updateSplitRemainder);
+    row.append(payee, category, value, remove); holder.append(row);
+  });
+  document.getElementById('split-total').textContent = money.format(amount(tx.receive));
+  updateSplitRemainder();
+}
+function updateSplitRemainder() {
+  const tx = state.transactions.find(item => item.id === openSplitTransactionId);
+  if (!tx) return;
+  const allocated = [...document.querySelectorAll('#split-rows .split-amount')]
+    .reduce((sum, input) => sum + Math.round(amount(input.value) * 100), 0);
+  const remainder = splitTotalCents(tx) - allocated;
+  const target = document.getElementById('split-remaining');
+  target.textContent = remainder === 0 ? 'Fully allocated' : `${money.format(Math.abs(remainder) / 100)} ${remainder > 0 ? 'left' : 'over'}`;
+  target.classList.toggle('balanced', remainder === 0);
 }
 
 function updateUI() {
@@ -181,7 +211,7 @@ function renderTransactions() {
     } else {
       row.append(makeCell(tx.date));
       const payee = makeCell(tx.payee); payee.className = 'payee'; row.append(payee);
-      row.append(makeCell(tx.category)); row.append(makeCell(tx.tag)); row.append(makeCell(tx.cleared, 'text-center'));
+      row.append(makeCell(tx.splits?.length ? `Split · ${tx.splits.length} parts` : tx.category)); row.append(makeCell(tx.tag)); row.append(makeCell(tx.cleared, 'text-center'));
       row.append(makeCell(tx.spend > 0 ? money.format(tx.spend) : '', 'neg'));
       row.append(makeCell(tx.receive > 0 ? money.format(tx.receive) : '', 'pos'));
       row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
@@ -189,14 +219,30 @@ function renderTransactions() {
       const action = document.createElement('td'); action.className = 'transaction-actions';
       const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
       edit.addEventListener('click', () => { tx.isEditing = true; renderTransactions(); });
-      action.append(edit, removeButton(index)); row.append(action);
+      action.append(edit);
+      if (amount(tx.receive) > 0 && amount(tx.spend) === 0) {
+        const split = document.createElement('button'); split.type = 'button'; split.textContent = tx.splits?.length ? 'Edit split' : 'Split';
+        split.addEventListener('click', () => openSplitEditor(index)); action.append(split);
+      }
+      action.append(removeButton(index)); row.append(action);
     }
     const memoRow = document.createElement('tr'); memoRow.className = 'memo-row';
     const memo = document.createElement('td'); memo.colSpan = 10;
     if (tx.isEditing) { const input = document.createElement('input'); input.type = 'text'; input.value = safeText(tx.memo); input.className = 'edit-input memo-edit'; input.placeholder = 'Enter memo'; memo.append(input); }
     else memo.textContent = tx.memo || 'No memo';
     memoRow.append(memo); body.append(row, memoRow);
+    if (!tx.isEditing && tx.splits?.length) {
+      const detailsRow = document.createElement('tr'); detailsRow.className = 'split-detail-row';
+      const details = document.createElement('td'); details.colSpan = 10;
+      details.textContent = tx.splits.map(split => `${split.payee || 'Unassigned'} · ${splitCategoryLabel(split.category)} · ${money.format(amount(split.amount))}`).join('  |  ');
+      detailsRow.append(details); body.append(detailsRow);
+    }
   });
+}
+
+function splitCategoryLabel(value) {
+  const { type, category } = splitCategory(value || 'Uncategorized');
+  return type ? `${type}: ${category}` : category;
 }
 
 function removeButton(index) {
@@ -225,6 +271,10 @@ function saveRow(index, row) {
   if (!date.value || !payee.value.trim() || (outgoing > 0 && incoming > 0) || (outgoing < 0 || incoming < 0)) {
     setStatus('Enter a date and payee, with either a non-negative spend or receive amount.', 'error'); return;
   }
+  const existing = state.transactions[index];
+  if (existing.splits?.length && Math.round(incoming * 100) !== splitTotalCents(existing)) {
+    setStatus('Update the split before changing this deposit amount.', 'error'); return;
+  }
   Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, memo: memo.value.trim(), isEditing: false });
   renderTransactions(); updateUI(); persist();
 }
@@ -234,6 +284,53 @@ function addTransaction() {
   const firstCategory = state.categoryTypes[firstType]?.[0];
   state.transactions.unshift({ id: makeId(), date: today(), payee: '', category: firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized', tag: '', memo: '', cleared: '', spend: 0, receive: 0, accountId: selectedAccountId || state.accounts[0]?.id, isEditing: true });
   renderTransactions();
+}
+
+function openSplitEditor(index) {
+  const tx = state.transactions[index];
+  if (!tx || amount(tx.receive) <= 0 || amount(tx.spend) > 0) return;
+  openSplitTransactionId = tx.id;
+  renderSplitRows(tx);
+  document.getElementById('split-modal').hidden = false;
+  document.querySelector('#split-rows input').focus();
+}
+function closeSplitEditor() {
+  document.getElementById('split-modal').hidden = true;
+  openSplitTransactionId = null;
+}
+async function saveTransactionSplit() {
+  const tx = state.transactions.find(item => item.id === openSplitTransactionId);
+  if (!tx) return closeSplitEditor();
+  const rows = [...document.querySelectorAll('#split-rows .split-input-row')];
+  const splits = rows.map(row => ({
+    id: makeId(),
+    payee: row.children[0].value.trim(),
+    category: row.children[1].value || 'Uncategorized',
+    amount: amount(row.querySelector('.split-amount').value)
+  }));
+  if (splits.length < 2 || splits.some(split => split.amount <= 0)) {
+    setStatus('Add at least two portions, each with an amount greater than zero.', 'error'); return;
+  }
+  if (splits.reduce((sum, split) => sum + Math.round(split.amount * 100), 0) !== splitTotalCents(tx)) {
+    setStatus('The split portions must add up exactly to the deposit.', 'error'); return;
+  }
+  tx.splits = splits;
+  closeSplitEditor();
+  renderTransactions();
+  generateCategoryReport();
+  await persist();
+  setStatus(`Split saved across ${splits.length} portions.`, 'success');
+}
+function addSplitRow() {
+  const holder = document.getElementById('split-rows');
+  const firstType = Object.keys(state.categoryTypes)[0];
+  const firstCategory = state.categoryTypes[firstType]?.[0];
+  const row = document.createElement('div'); row.className = 'split-input-row';
+  const payee = document.createElement('input'); payee.type = 'text'; payee.maxLength = 80; payee.placeholder = 'e.g. Alex'; payee.setAttribute('aria-label', 'Person or source');
+  const category = categorySelect(firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized'); category.setAttribute('aria-label', 'Category');
+  const value = document.createElement('input'); value.type = 'number'; value.min = '0.01'; value.step = '0.01'; value.inputMode = 'decimal'; value.value = '0.00'; value.className = 'split-amount'; value.setAttribute('aria-label', 'Amount'); value.addEventListener('input', updateSplitRemainder);
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'remove-split-btn'; remove.textContent = 'Remove'; remove.addEventListener('click', () => { row.remove(); updateSplitRemainder(); });
+  row.append(payee, category, value, remove); holder.append(row); value.focus(); updateSplitRemainder();
 }
 
 function showAddAccountForm() {
@@ -362,14 +459,18 @@ function generateCategoryReport() {
   const transactions = state.transactions.filter(inRange);
   const income = transactions.reduce((sum, tx) => sum + amount(tx.receive), 0);
   const spending = transactions.reduce((sum, tx) => sum + amount(tx.spend), 0);
-  const summarize = (field) => transactions.reduce((totals, tx) => {
-    if (amount(tx[field]) > 0) {
-      const { type, category } = splitCategory(tx.category || 'Uncategorized');
+  const summarize = field => transactions.reduce((totals, tx) => {
+    const entries = field === 'receive' && tx.splits?.length
+      ? tx.splits.map(split => ({ category: split.category, value: split.amount }))
+      : [{ category: tx.category, value: tx[field] }];
+    entries.forEach(entry => {
+      if (amount(entry.value) <= 0) return;
+      const { type, category } = splitCategory(entry.category || 'Uncategorized');
       const group = type || 'Other';
       if (!totals.has(group)) totals.set(group, new Map());
       const categories = totals.get(group);
-      categories.set(category || 'Uncategorized', amount((categories.get(category || 'Uncategorized') || 0) + amount(tx[field])));
-    }
+      categories.set(category || 'Uncategorized', amount((categories.get(category || 'Uncategorized') || 0) + amount(entry.value)));
+    });
     return totals;
   }, new Map());
   const renderSummary = (target, totals, total, label) => {
@@ -481,11 +582,16 @@ async function start() {
   document.getElementById('update-forecast-btn').addEventListener('click', renderForecast);
   document.getElementById('forecast-days').addEventListener('change', renderForecast);
   document.getElementById('refresh-report-btn').addEventListener('click', generateCategoryReport);
+  document.getElementById('add-split-row-btn').addEventListener('click', addSplitRow);
+  document.getElementById('save-splits-btn').addEventListener('click', saveTransactionSplit);
+  document.getElementById('close-split-modal-btn').addEventListener('click', closeSplitEditor);
+  document.getElementById('cancel-splits-btn').addEventListener('click', closeSplitEditor);
+  document.getElementById('split-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeSplitEditor(); });
   document.getElementById('close-category-modal-btn').addEventListener('click', closeCategoryManager);
   document.getElementById('done-categories-btn').addEventListener('click', closeCategoryManager);
   document.getElementById('category-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryManager(); });
   document.getElementById('add-category-form').addEventListener('submit', addCategory);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeCategoryManager(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCategoryManager(); closeSplitEditor(); } });
   window.vault.onOpenCategoryManager(openCategoryManager);
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Ready.', 'success');

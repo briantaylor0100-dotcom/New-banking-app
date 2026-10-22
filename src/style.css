@@ -291,6 +291,28 @@ tr:has(.edit-input) {
     border-bottom: 1px solid #edf2f7;
 }
 
+.split-detail-row td { padding: 4px 15px 10px 28px; color: #64748b; font-size: 12px; background: #fbfcfe; }
+.split-total-line { display: flex; align-items: center; gap: 8px; margin: 12px 0 18px; }
+.split-total-line strong { font-size: 18px; }
+#split-remaining { margin-left: auto; color: #b42318; font-size: 13px; font-weight: 600; }
+#split-remaining.balanced { color: #1f7a45; }
+.split-column-headings, .split-input-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(180px, 1.2fr) 120px auto; gap: 8px; align-items: center; }
+.split-column-headings { padding: 0 4px 6px; color: #64748b; font-size: 12px; font-weight: 600; }
+.split-rows { display: grid; gap: 8px; }
+.split-input-row input, .split-input-row select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; font: inherit; }
+.split-input-row .remove-split-btn { border: 0; background: transparent; color: #b42318; cursor: pointer; padding: 8px; }
+.split-modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.split-modal-actions button { margin: 0; }
+.split-modal-actions #add-split-row-btn { margin-right: auto; }
+
+@media (max-width: 640px) {
+    .split-column-headings { display: none; }
+    .split-input-row { grid-template-columns: 1fr 1fr; }
+    .split-input-row .remove-split-btn { justify-self: start; }
+    .split-modal-actions { flex-wrap: wrap; }
+    .split-modal-actions #add-split-row-btn { width: 100%; }
+}
+
 /* Style the Memo Text */
 .memo-text {
     font-size: 12px;
