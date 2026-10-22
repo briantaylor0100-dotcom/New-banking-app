@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs/promises');
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 
 app.disableHardwareAcceleration();
 
@@ -47,6 +47,16 @@ ipcMain.handle('bank-file:select', async () => {
   return { name: path.basename(result.filePaths[0]), content: await fs.readFile(result.filePaths[0], 'utf8') };
 });
 
+function createApplicationMenu() {
+  const sendToFocusedWindow = channel => BrowserWindow.getFocusedWindow()?.webContents.send(channel);
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: 'File', submenu: [{ role: 'close' }, { type: 'separator' }, { role: 'quit' }] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
+    { label: 'Tools', submenu: [{ label: 'Manage Categories…', click: () => sendToFocusedWindow('vault:open-category-manager') }] },
+    { label: 'Help', submenu: [{ label: 'About VaultCompute', click: () => dialog.showMessageBox({ type: 'info', title: 'About VaultCompute', message: 'VaultCompute', detail: 'Personal banking and transaction reporting.' }) }] }
+  ]));
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
@@ -69,6 +79,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  createApplicationMenu();
   createWindow();
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });

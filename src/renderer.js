@@ -1,9 +1,17 @@
-let state = { accounts: [], transactions: [] };
+const DEFAULT_CATEGORY_TYPES = {
+  'Transfers': ['Account transfer'],
+  'Personal spending': ['Groceries', 'Dining', 'Transportation', 'Shopping', 'Entertainment'],
+  'Bills & utilities': ['Rent / mortgage', 'Utilities', 'Insurance', 'Phone & internet'],
+  'Income': ['Paycheck', 'Other income']
+};
+let state = { accounts: [], transactions: [], categoryTypes: DEFAULT_CATEGORY_TYPES, planning: { safetyBuffer: 0, goalReserve: 0 }, importTemplates: [] };
 let selectedAccountId = null;
+let pendingImport = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
 const reportsPage = document.getElementById('reports-page');
 const importPage = document.getElementById('import-page');
+const planningPage = document.getElementById('planning-page');
 const navItems = document.querySelectorAll('.nav-item');
 const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' });
 
@@ -55,6 +63,29 @@ function accountSelect(value) {
   });
   return select;
 }
+function normalizedCategoryTypes(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return structuredClone(DEFAULT_CATEGORY_TYPES);
+  return Object.fromEntries(Object.entries(value)
+    .map(([type, categories]) => [safeText(type).trim(), [...new Set((Array.isArray(categories) ? categories : []).map(category => safeText(category).trim()).filter(Boolean))]])
+    .filter(([type]) => type));
+}
+function categoryValue(type, category) { return `${type}::${category}`; }
+function splitCategory(value) {
+  const [type, ...rest] = safeText(value).split('::');
+  return rest.length ? { type, category: rest.join('::') } : { type: '', category: safeText(value) };
+}
+function categorySelect(value) {
+  const select = document.createElement('select'); select.className = 'edit-input';
+  const { type: selectedType, category: selectedCategory } = splitCategory(value);
+  const found = Object.entries(state.categoryTypes).some(([type, categories]) => type === selectedType && categories.includes(selectedCategory));
+  if (!found && value) select.add(new Option(safeText(value), safeText(value), true, true));
+  Object.entries(state.categoryTypes).sort(([a], [b]) => a.localeCompare(b)).forEach(([type, categories]) => {
+    const group = document.createElement('optgroup'); group.label = type;
+    categories.forEach(category => group.append(new Option(category, categoryValue(type, category), false, type === selectedType && category === selectedCategory)));
+    select.append(group);
+  });
+  return select;
+}
 
 function updateUI() {
   const current = balances();
@@ -65,6 +96,38 @@ function updateUI() {
   document.getElementById('net-worth').textContent = money.format(totalCash - totalDebt);
   document.getElementById('all-accounts-balance').textContent = money.format(totalCash - totalDebt);
   renderAccountList(current);
+  renderSafeToSpend(current);
+}
+
+function liquidCash(current = balances()) { return current.filter(account => account.type !== 'debt' && account.balance > 0).reduce((sum, account) => sum + account.balance, 0); }
+function addDays(date, days) { const result = new Date(`${date}T12:00:00`); result.setDate(result.getDate() + days); return result.toISOString().slice(0, 10); }
+function daysBetween(a, b) { return Math.round((new Date(`${b}T12:00:00`) - new Date(`${a}T12:00:00`)) / 86400000); }
+function normalizedPayee(value) { return safeText(value).toLowerCase().replace(/\d+/g, '').replace(/[^a-z]/g, ' ').replace(/\s+/g, ' ').trim(); }
+function recurringPatterns() {
+  const groups = new Map();
+  state.transactions.filter(tx => tx.date && (amount(tx.spend) || amount(tx.receive))).forEach(tx => {
+    const key = `${normalizedPayee(tx.payee)}|${amount(tx.receive) > 0 ? 'income' : 'expense'}`;
+    if (!normalizedPayee(tx.payee)) return;
+    const list = groups.get(key) || []; list.push(tx); groups.set(key, list);
+  });
+  return [...groups.values()].map(items => {
+    const sorted = [...items].sort((a, b) => a.date.localeCompare(b.date));
+    const intervals = sorted.slice(1).map((tx, i) => daysBetween(sorted[i].date, tx.date)).filter(d => d >= 5 && d <= 40);
+    const cadence = intervals.length ? Math.round(intervals.reduce((a, b) => a + b, 0) / intervals.length) : 0;
+    const values = sorted.map(tx => amount(tx.receive) || amount(tx.spend));
+    const average = values.reduce((a, b) => a + b, 0) / values.length;
+    const variance = Math.max(...values) - Math.min(...values);
+    return { payee: sorted[0].payee, direction: amount(sorted[0].receive) > 0 ? 'income' : 'expense', items: sorted, cadence, average: amount(average), variance: amount(variance), latest: sorted.at(-1) };
+  }).filter(pattern => pattern.items.length >= 2 && pattern.cadence >= 5 && pattern.cadence <= 35 && pattern.variance <= Math.max(5, pattern.average * .25));
+}
+function upcomingRecurring(days = 30) { const end = addDays(today(), days); return recurringPatterns().filter(p => p.direction === 'expense').map(p => ({ ...p, nextDate: addDays(p.latest.date, p.cadence) })).filter(p => p.nextDate >= today() && p.nextDate <= end); }
+function renderSafeToSpend(current) {
+  const planning = state.planning || {}; const bills = upcomingRecurring(30).reduce((sum, bill) => sum + bill.average, 0);
+  const safe = Math.max(0, liquidCash(current) - bills - amount(planning.goalReserve) - amount(planning.safetyBuffer));
+  document.getElementById('safe-to-spend').textContent = money.format(safe);
+  document.getElementById('safe-spend-explanation').textContent = `${money.format(liquidCash(current))} liquid cash − ${money.format(bills)} due in 30 days − ${money.format(planning.goalReserve)} goals − ${money.format(planning.safetyBuffer)} buffer.`;
+  document.getElementById('safety-buffer').value = amount(planning.safetyBuffer);
+  document.getElementById('goal-reserve').value = amount(planning.goalReserve);
 }
 
 function renderAccountList(currentAccounts = balances()) {
@@ -104,7 +167,7 @@ function renderTransactions() {
     if (tx.isEditing) {
       row.append(inputCell('date', tx.date));
       row.append(inputCell('text', tx.payee));
-      row.append(inputCell('text', tx.category));
+      const categoryCell = document.createElement('td'); categoryCell.append(categorySelect(tx.category)); row.append(categoryCell);
       row.append(inputCell('text', tx.tag));
       row.append(inputCell('text', tx.cleared, 'edit-small'));
       row.append(inputCell('number', tx.spend));
@@ -113,7 +176,7 @@ function renderTransactions() {
       const accountCell = document.createElement('td'); accountCell.append(accountSelect(tx.accountId)); row.append(accountCell);
       const action = document.createElement('td'); action.className = 'transaction-actions';
       const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save';
-      save.addEventListener('click', () => saveRow(index));
+      save.addEventListener('click', () => saveRow(index, row));
       action.append(save, removeButton(index)); row.append(action);
     } else {
       row.append(makeCell(tx.date));
@@ -154,21 +217,22 @@ function removeTransaction(index) {
   persist();
 }
 
-function saveRow(index) {
-  const rows = document.querySelectorAll('#transaction-body .main-row');
-  const fields = rows[index].querySelectorAll('input, select');
-  const memo = document.querySelectorAll('#transaction-body .memo-row input')[index];
+function saveRow(index, row) {
+  const fields = row.querySelectorAll('input, select');
+  const memo = row.nextElementSibling.querySelector('input');
   const [date, payee, category, tag, cleared, spend, receive, account] = fields;
   const outgoing = amount(spend.value), incoming = amount(receive.value);
   if (!date.value || !payee.value.trim() || (outgoing > 0 && incoming > 0) || (outgoing < 0 || incoming < 0)) {
     setStatus('Enter a date and payee, with either a non-negative spend or receive amount.', 'error'); return;
   }
-  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value.trim() || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, memo: memo.value.trim(), isEditing: false });
+  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, memo: memo.value.trim(), isEditing: false });
   renderTransactions(); updateUI(); persist();
 }
 
 function addTransaction() {
-  state.transactions.unshift({ id: makeId(), date: today(), payee: '', category: 'Uncategorized', tag: '', memo: '', cleared: '', spend: 0, receive: 0, accountId: selectedAccountId || state.accounts[0]?.id, isEditing: true });
+  const firstType = Object.keys(state.categoryTypes)[0];
+  const firstCategory = state.categoryTypes[firstType]?.[0];
+  state.transactions.unshift({ id: makeId(), date: today(), payee: '', category: firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized', tag: '', memo: '', cleared: '', spend: 0, receive: 0, accountId: selectedAccountId || state.accounts[0]?.id, isEditing: true });
   renderTransactions();
 }
 
@@ -207,6 +271,10 @@ async function addAccount(event) {
 }
 
 function parseCsv(text) {
+  const rows = csvRows(text); if (rows.length < 2) return [];
+  return parseCsvRows(rows);
+}
+function csvRows(text) {
   const rows = []; let row = [], field = '', quoted = false;
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i], next = text[i + 1];
@@ -217,6 +285,9 @@ function parseCsv(text) {
     else field += char;
   }
   if (field || row.length) { row.push(field.trim()); rows.push(row); }
+  return rows;
+}
+function parseCsvRows(rows) {
   if (rows.length < 2) return [];
   const headings = rows.shift().map(x => x.toLowerCase().replace(/[^a-z0-9]/g, ''));
   const get = (record, names) => record[headings.findIndex(h => names.includes(h))] || '';
@@ -244,8 +315,14 @@ function parseOfx(text) {
 async function importBankFile() {
   const selected = await window.vault.selectBankFile();
   if (!selected) return;
-  const parsed = /<OFX|<STMTTRN>/i.test(selected.content) ? parseOfx(selected.content) : parseCsv(selected.content);
-  if (!parsed.length) { setStatus(`No transactions found in ${selected.name}. Check its format.`, 'error'); return; }
+  if (/<OFX|<STMTTRN>/i.test(selected.content)) return await finishImport(parseOfx(selected.content), selected.name);
+  const rows = csvRows(selected.content);
+  if (rows.length < 2) { setStatus(`No transactions found in ${selected.name}. Check its format.`, 'error'); return; }
+  pendingImport = { name: selected.name, rows };
+  renderMappingInterface(rows, selected.name);
+}
+async function finishImport(parsed, name) {
+  if (!parsed.length) { setStatus(`No transactions found in ${name}. Check its format.`, 'error'); return; }
   const accountId = document.getElementById('import-account').value;
   const keys = new Set(state.transactions.map(tx => tx.fitId ? `fit:${tx.fitId}` : `${tx.accountId}|${tx.date}|${tx.payee}|${tx.spend}|${tx.receive}`));
   let added = 0, skipped = 0;
@@ -256,8 +333,27 @@ async function importBankFile() {
   });
   state.transactions.sort((a, b) => b.date.localeCompare(a.date));
   renderTransactions(); updateUI(); await persist();
-  setStatus(`Imported ${added} transaction${added === 1 ? '' : 's'}; skipped ${skipped} duplicate${skipped === 1 ? '' : 's'}.`, 'success');
+  setStatus(`Imported ${added} transaction${added === 1 ? '' : 's'} from ${name}; skipped ${skipped} duplicate${skipped === 1 ? '' : 's'}.`, 'success');
   showPage('dashboard');
+}
+function renderMappingInterface(rows, name) {
+  const fields = ['date', 'description', 'amount', 'debit', 'credit', 'memo'];
+  const headings = rows[0]; const template = state.importTemplates?.find(item => item.headers?.join('|') === headings.join('|'));
+  document.getElementById('mapping-file-name').textContent = `${name}: choose where each field lives. Preview: ${headings.join(' · ')}`;
+  const holder = document.getElementById('mapping-fields'); holder.replaceChildren();
+  fields.forEach(field => { const label = document.createElement('label'); label.textContent = field[0].toUpperCase() + field.slice(1); const select = document.createElement('select'); select.dataset.field = field; select.add(new Option('Not mapped', '')); headings.forEach((heading, index) => select.add(new Option(`${heading || `Column ${index + 1}`}`, index))); const inferred = template?.mapping?.[field] ?? inferColumn(headings, field); select.value = inferred === '' || inferred === undefined ? '' : inferred; label.append(select); holder.append(label); });
+  document.getElementById('mapping-template-name').value = template?.name || '';
+  document.getElementById('mapping-panel').hidden = false;
+}
+function inferColumn(headings, field) { const aliases = { date: ['date', 'transactiondate'], description: ['description', 'payee', 'name'], amount: ['amount', 'transactionamount'], debit: ['debit', 'withdrawal'], credit: ['credit', 'deposit'], memo: ['memo', 'notes'] }; const index = headings.findIndex(h => aliases[field].includes(safeText(h).toLowerCase().replace(/[^a-z]/g, ''))); return index < 0 ? '' : index; }
+async function confirmMappedImport() {
+  if (!pendingImport) return; const mapping = Object.fromEntries([...document.querySelectorAll('#mapping-fields select')].map(select => [select.dataset.field, select.value]));
+  if (mapping.date === '' || mapping.description === '' || (mapping.amount === '' && mapping.debit === '' && mapping.credit === '')) { setStatus('Map Date, Description, and either Amount or Debit/Credit.', 'error'); return; }
+  const name = document.getElementById('mapping-template-name').value.trim();
+  if (name) { state.importTemplates = (state.importTemplates || []).filter(template => template.name !== name); state.importTemplates.push({ name, headers: pendingImport.rows[0], mapping }); await persist(); }
+  const [headers, ...records] = pendingImport.rows; const value = (record, field) => mapping[field] === '' ? '' : record[Number(mapping[field])] || '';
+  const parsed = records.filter(record => record.some(Boolean)).map((record, index) => { const signed = amount(value(record, 'amount')); const debit = amount(value(record, 'debit')); const credit = amount(value(record, 'credit')); return { id: `mapped-${index}`, date: value(record, 'date') || today(), payee: value(record, 'description') || 'Unknown Payee', memo: value(record, 'memo'), spend: debit || (signed < 0 ? Math.abs(signed) : 0), receive: credit || (signed > 0 ? signed : 0) }; });
+  document.getElementById('mapping-panel').hidden = true; pendingImport = null; await finishImport(parsed, name || 'mapped statement');
 }
 
 function generateCategoryReport() {
@@ -268,18 +364,25 @@ function generateCategoryReport() {
   const spending = transactions.reduce((sum, tx) => sum + amount(tx.spend), 0);
   const summarize = (field) => transactions.reduce((totals, tx) => {
     if (amount(tx[field]) > 0) {
-      const category = tx.category || 'Uncategorized';
-      totals.set(category, amount((totals.get(category) || 0) + amount(tx[field])));
+      const { type, category } = splitCategory(tx.category || 'Uncategorized');
+      const group = type || 'Other';
+      if (!totals.has(group)) totals.set(group, new Map());
+      const categories = totals.get(group);
+      categories.set(category || 'Uncategorized', amount((categories.get(category || 'Uncategorized') || 0) + amount(tx[field])));
     }
     return totals;
   }, new Map());
   const renderSummary = (target, totals, total, label) => {
     target.replaceChildren();
-    [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([category, value]) => {
-      const row = document.createElement('div'); row.className = 'report-row';
-      const name = document.createElement('span'); name.textContent = category;
-      const valueNode = document.createElement('span'); valueNode.textContent = money.format(value);
-      row.append(name, valueNode); target.append(row);
+    if (!totals.size) { const empty = document.createElement('div'); empty.className = 'report-row empty-row'; empty.textContent = 'No transactions in this period.'; target.append(empty); }
+    [...totals.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([type, categories]) => {
+      const groupTotal = [...categories.values()].reduce((sum, value) => sum + value, 0);
+      const parent = document.createElement('div'); parent.className = 'report-row parent-cat';
+      parent.append(Object.assign(document.createElement('span'), { textContent: type }), Object.assign(document.createElement('span'), { textContent: money.format(groupTotal) })); target.append(parent);
+      [...categories.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([category, value]) => {
+        const row = document.createElement('div'); row.className = 'report-row sub-cat';
+        row.append(Object.assign(document.createElement('span'), { textContent: category }), Object.assign(document.createElement('span'), { textContent: money.format(value) })); target.append(row);
+      });
     });
     const totalRow = document.createElement('div'); totalRow.className = 'report-row total-row';
     const name = document.createElement('span'); name.textContent = label;
@@ -289,13 +392,65 @@ function generateCategoryReport() {
   renderSummary(document.getElementById('income-report-table'), summarize('receive'), income, 'TOTAL INCOME');
   renderSummary(document.getElementById('spending-report-table'), summarize('spend'), spending, 'TOTAL SPENDING');
   document.getElementById('report-net-flow').textContent = money.format(income - spending);
+  renderSleuthAlerts();
+}
+function renderSleuthAlerts() {
+  const alerts = []; const patterns = recurringPatterns();
+  patterns.filter(p => p.direction === 'expense').forEach(p => {
+    const label = normalizedPayee(p.payee);
+    if (/fee|overdraft|atm charge|service charge/.test(label)) alerts.push({ type: 'Fee', text: `${p.payee}: recurring charge averaging ${money.format(p.average)}.` });
+    const values = p.items.map(tx => amount(tx.spend));
+    if (values.length >= 3 && values.at(-1) > values[0] * 1.08) alerts.push({ type: 'Price increase', text: `${p.payee} rose from ${money.format(values[0])} to ${money.format(values.at(-1))}.` });
+    if (/subscription|stream|netflix|spotify|membership|prime|icloud|gym/.test(label)) alerts.push({ type: 'Subscription', text: `${p.payee}: approximately every ${p.cadence} days at ${money.format(p.average)}.` });
+  });
+  const holder = document.getElementById('sleuth-alerts'); holder.replaceChildren();
+  if (!alerts.length) { holder.textContent = 'No recurring fees, rising charges, or recognizable subscriptions detected yet.'; return; }
+  alerts.forEach(alert => { const row = document.createElement('div'); row.className = 'sleuth-alert'; const text = document.createElement('span'); text.textContent = `${alert.type}: ${alert.text}`; const button = document.createElement('button'); button.type = 'button'; button.className = 'secondary-btn'; button.textContent = 'Create dispute note'; button.addEventListener('click', () => { navigator.clipboard?.writeText(`I am requesting a review of this ${alert.type.toLowerCase()}: ${alert.text}`); setStatus('Dispute note copied to your clipboard.', 'success'); }); row.append(text, button); holder.append(row); });
+}
+function renderForecast() {
+  const horizon = Number(document.getElementById('forecast-days').value); const events = [];
+  recurringPatterns().forEach(pattern => { let date = addDays(pattern.latest.date, pattern.cadence); while (date <= addDays(today(), horizon)) { if (date >= today()) events.push({ date, delta: pattern.direction === 'income' ? pattern.average : -pattern.average, label: pattern.payee }); date = addDays(date, pattern.cadence); } });
+  const simulated = amount(document.getElementById('simulation-amount').value); const simulationDate = document.getElementById('simulation-date').value || today(); const delay = Number(document.getElementById('simulation-delay').value) || 0; if (simulated) events.push({ date: addDays(simulationDate, delay), delta: -simulated, label: 'Simulated purchase' });
+  let balance = liquidCash(); let low = balance; const byDate = new Map(); events.forEach(event => byDate.set(event.date, [...(byDate.get(event.date) || []), event])); const points = [];
+  for (let day = 0; day <= horizon; day += 1) { const date = addDays(today(), day); (byDate.get(date) || []).forEach(event => balance += event.delta); low = Math.min(low, balance); points.push({ date, balance }); }
+  document.getElementById('forecast-low').textContent = `Projected low: ${money.format(low)}`; document.getElementById('forecast-note').textContent = `${events.length} inferred/simulated event${events.length === 1 ? '' : 's'} included.`;
+  const max = Math.max(...points.map(point => Math.abs(point.balance)), 1); const timeline = document.getElementById('cashflow-timeline'); timeline.replaceChildren(); points.filter((_, index) => index % Math.max(1, Math.ceil(horizon / 15)) === 0 || index === points.length - 1).forEach(point => { const bar = document.createElement('div'); bar.className = 'timeline-point'; const fill = document.createElement('i'); fill.style.height = `${Math.max(5, Math.abs(point.balance) / max * 100)}%`; fill.classList.toggle('negative', point.balance < 0); bar.append(fill); const label = document.createElement('small'); label.textContent = `${point.date.slice(5)}\n${money.format(point.balance)}`; bar.append(label); timeline.append(bar); });
+  const list = document.getElementById('recurring-list'); list.replaceChildren(); const patterns = recurringPatterns(); if (!patterns.length) list.textContent = 'Import at least two similar transactions to detect a repeating pattern.'; patterns.forEach(pattern => { const item = document.createElement('div'); item.className = 'recurring-item'; item.textContent = `${pattern.payee} · ${pattern.direction} · every ~${pattern.cadence} days · ${money.format(pattern.average)}`; list.append(item); });
+}
+function renderCategoryManager() {
+  const list = document.getElementById('category-type-list'); const types = document.getElementById('category-types');
+  list.replaceChildren(); types.replaceChildren();
+  Object.entries(state.categoryTypes).sort(([a], [b]) => a.localeCompare(b)).forEach(([type, categories]) => {
+    types.append(new Option(type, type));
+    const card = document.createElement('section'); card.className = 'category-type-card';
+    const title = document.createElement('h3'); title.textContent = type; card.append(title);
+    if (!categories.length) { const empty = document.createElement('span'); empty.textContent = 'No categories yet'; card.append(empty); }
+    categories.forEach(category => { const chip = document.createElement('span'); chip.className = 'category-chip'; chip.append(document.createTextNode(category)); const remove = document.createElement('button'); remove.type = 'button'; remove.textContent = '×'; remove.setAttribute('aria-label', `Remove ${category}`); remove.addEventListener('click', () => removeCategory(type, category)); chip.append(remove); card.append(chip); });
+    list.append(card);
+  });
+}
+function openCategoryManager() { document.getElementById('category-modal').hidden = false; renderCategoryManager(); document.getElementById('category-type-input').focus(); }
+function closeCategoryManager() { document.getElementById('category-modal').hidden = true; }
+async function addCategory(event) {
+  event.preventDefault(); const type = document.getElementById('category-type-input').value.trim(); const category = document.getElementById('category-name-input').value.trim();
+  if (!type || !category) return;
+  state.categoryTypes[type] = state.categoryTypes[type] || [];
+  if (state.categoryTypes[type].some(item => item.toLocaleLowerCase() === category.toLocaleLowerCase())) { setStatus('That category already exists for this transaction type.', 'error'); return; }
+  state.categoryTypes[type].push(category); event.target.reset(); renderCategoryManager(); await persist(); setStatus(`${category} added to ${type}.`, 'success');
+  closeCategoryManager();
+}
+async function removeCategory(type, category) {
+  if (!window.confirm(`Remove “${category}” from ${type}? Existing transactions will keep this category.`)) return;
+  state.categoryTypes[type] = state.categoryTypes[type].filter(item => item !== category); renderCategoryManager(); await persist(); setStatus(`${category} removed.`, 'success');
 }
 function showPage(page) {
   dashboardPage.hidden = page !== 'dashboard';
   reportsPage.hidden = page !== 'reports';
   importPage.hidden = page !== 'import';
+  planningPage.hidden = page !== 'planning';
   navItems.forEach(item => item.classList.toggle('active', item.dataset.page === page));
   if (page === 'reports') generateCategoryReport();
+  if (page === 'planning') renderForecast();
 }
 function populateAccountSelectors() {
   const importSelect = document.getElementById('import-account'); importSelect.replaceChildren();
@@ -304,6 +459,9 @@ function populateAccountSelectors() {
 async function start() {
   state = await window.vault.load();
   state.accounts = state.accounts.length ? state.accounts : [];
+  state.categoryTypes = normalizedCategoryTypes(state.categoryTypes);
+  state.planning = { safetyBuffer: amount(state.planning?.safetyBuffer), goalReserve: amount(state.planning?.goalReserve) };
+  state.importTemplates = Array.isArray(state.importTemplates) ? state.importTemplates : [];
   state.transactions = state.transactions.map(tx => ({ ...tx, id: tx.id || makeId(), accountId: tx.accountId || state.accounts[0]?.id, isEditing: false, spend: amount(tx.spend), receive: amount(tx.receive) }));
   showPage('dashboard');
   populateAccountSelectors(); updateUI(); renderTransactions();
@@ -317,7 +475,18 @@ async function start() {
   document.getElementById('cancel-add-account-btn').addEventListener('click', hideAddAccountForm);
   document.getElementById('add-account-form').addEventListener('submit', addAccount);
   document.getElementById('select-file-btn').addEventListener('click', importBankFile);
+  document.getElementById('confirm-import-btn').addEventListener('click', confirmMappedImport);
+  document.getElementById('cancel-import-btn').addEventListener('click', () => { pendingImport = null; document.getElementById('mapping-panel').hidden = true; });
+  document.getElementById('safety-plan-form').addEventListener('submit', async event => { event.preventDefault(); state.planning = { safetyBuffer: amount(document.getElementById('safety-buffer').value), goalReserve: amount(document.getElementById('goal-reserve').value) }; updateUI(); await persist(); setStatus('Safe-to-spend plan saved.', 'success'); });
+  document.getElementById('update-forecast-btn').addEventListener('click', renderForecast);
+  document.getElementById('forecast-days').addEventListener('change', renderForecast);
   document.getElementById('refresh-report-btn').addEventListener('click', generateCategoryReport);
+  document.getElementById('close-category-modal-btn').addEventListener('click', closeCategoryManager);
+  document.getElementById('done-categories-btn').addEventListener('click', closeCategoryManager);
+  document.getElementById('category-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryManager(); });
+  document.getElementById('add-category-form').addEventListener('submit', addCategory);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeCategoryManager(); });
+  window.vault.onOpenCategoryManager(openCategoryManager);
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Ready.', 'success');
 }

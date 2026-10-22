@@ -14,6 +14,7 @@
             
             <nav class="nav-links">
                 <div class="nav-item active" data-page="dashboard">Dashboard</div>
+                <div class="nav-item" data-page="planning">Plan ahead</div>
                 <div class="nav-item" data-page="reports">Reports</div>
                 <div class="nav-item" data-page="import">Bank Import</div>
             </nav>
@@ -68,6 +69,14 @@
                             <span id="net-worth" class="stat-value">$0.00</span>
                         </div>
                     </section>
+                <section class="safe-spend-card">
+                    <div><span class="eyebrow">SAFE TO SPEND</span><h2 id="safe-to-spend">$0.00</h2><p id="safe-spend-explanation">Set a buffer and goals to calculate your available cash.</p></div>
+                    <form id="safety-plan-form" class="safety-plan-form">
+                        <label>Safety buffer <input id="safety-buffer" type="number" min="0" step="0.01"></label>
+                        <label>Active goal reserve <input id="goal-reserve" type="number" min="0" step="0.01"></label>
+                        <button class="secondary-btn" type="submit">Save plan</button>
+                    </form>
+                </section>
                 
                 <section class="transaction-container">
                     <div class="table-header">
@@ -106,6 +115,19 @@
                         <button id="select-file-btn" class="secondary-btn">Select File</button>
                     </div>
                 </div>
+                <section id="mapping-panel" class="mapping-panel" hidden>
+                    <h2>Map this statement</h2><p id="mapping-file-name"></p>
+                    <div id="mapping-fields" class="mapping-fields"></div>
+                    <label>Save as template <input id="mapping-template-name" maxlength="40" placeholder="e.g. My Credit Union"></label>
+                    <div><button id="confirm-import-btn" class="primary-btn" type="button">Import mapped transactions</button> <button id="cancel-import-btn" class="secondary-btn" type="button">Cancel</button></div>
+                </section>
+            </div>
+
+            <div id="planning-page" class="page" hidden>
+                <header class="page-header"><div><h1>Cash flow plan</h1><p>Forecasts use repeated historical transactions and are estimates, not bank balances.</p></div><label>Horizon <select id="forecast-days"><option value="30">30 days</option><option value="45">45 days</option><option value="60">60 days</option></select></label></header>
+                <section class="simulation-card"><h2>Simulate a purchase</h2><label>Amount <input id="simulation-amount" type="number" min="0" step="0.01" value="0"></label><label>Date <input id="simulation-date" type="date"></label><label>Delay days <input id="simulation-delay" type="number" min="0" max="60" value="0"></label><button id="update-forecast-btn" class="secondary-btn" type="button">Update forecast</button></section>
+                <section class="timeline-card"><div class="timeline-summary"><strong id="forecast-low">Projected low: $0.00</strong><span id="forecast-note"></span></div><div id="cashflow-timeline" class="cashflow-timeline"></div></section>
+                <section><h2>Detected recurring cash flow</h2><div id="recurring-list" class="recurring-list"></div></section>
             </div>
 
             <div id="reports-page" class="page" hidden>
@@ -121,6 +143,7 @@
                 </header>
                 
                 <div class="reports-container">
+                    <section class="report-section"><h2>Subscription & fee sleuth</h2><p class="muted">Potential patterns based on imported history. Review before acting.</p><div id="sleuth-alerts" class="sleuth-alerts"></div></section>
                     <section class="report-section">
                         <h2>Income & Cash Inflow (selected period)</h2>
                         <div id="income-report-table" class="report-block">
@@ -140,6 +163,24 @@
                 </div>
             </div>
         </main>
+    </div>
+    <div id="category-modal" class="modal-backdrop" hidden>
+        <section class="category-modal" role="dialog" aria-modal="true" aria-labelledby="category-modal-title">
+            <header class="modal-header">
+                <div><h2 id="category-modal-title">Manage categories</h2><p>Organize categories by transaction type. They will be available in transactions and reports.</p></div>
+                <button id="close-category-modal-btn" class="modal-close" type="button" aria-label="Close">×</button>
+            </header>
+            <div id="category-type-list" class="category-type-list"></div>
+            <form id="add-category-form" class="category-form">
+                <div><label for="category-type-input">Transaction type</label>
+                <input id="category-type-input" list="category-types" maxlength="50" placeholder="e.g. Personal spending" required></div>
+                <datalist id="category-types"></datalist>
+                <div><label for="category-name-input">Category</label>
+                <input id="category-name-input" maxlength="50" placeholder="e.g. Groceries" required></div>
+                <button class="primary-btn" type="submit">Add category</button>
+                <button id="done-categories-btn" class="secondary-btn" type="button">Done</button>
+            </form>
+        </section>
     </div>
     <script src="renderer.js"></script>
 </body>
