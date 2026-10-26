@@ -382,6 +382,17 @@ tr:has(.edit-input) {
 
 .modal-backdrop { position: fixed; z-index: 20; inset: 0; background: rgba(15, 23, 42, .45); display: grid; place-items: center; padding: 20px; }
 .modal-backdrop[hidden] { display: none !important; }
+.dashboard-actions { display: flex; gap: 8px; align-items: center; }
+.card-payment-form { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.card-payment-form label { font-size: 13px; font-weight: 600; }
+.card-payment-form select, .card-payment-form input { width: 100%; padding: 9px; border: 1px solid #cbd5e0; border-radius: 5px; }
+.card-payment-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.reverse-import-label { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.import-review-table-wrap { overflow: auto; max-height: 50vh; }
+.import-review-table { width: 100%; border-collapse: collapse; }
+.import-review-table th, .import-review-table td { padding: 6px; border-bottom: 1px solid #e2e8f0; }
+.import-review-table input { min-width: 90px; width: 100%; padding: 7px; border: 1px solid #cbd5e1; border-radius: 4px; }
+.import-review-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 .category-modal { width: min(650px, 100%); max-height: min(720px, 90vh); overflow: auto; background: white; padding: 24px; border-radius: 10px; box-shadow: 0 18px 45px rgba(0,0,0,.25); }
 .modal-header { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #e2e8f0; margin-bottom: 16px; }
 .modal-header h2 { margin: 0 0 5px; }.modal-header p { margin: 0 0 16px; color: #64748b; font-size: 14px; }

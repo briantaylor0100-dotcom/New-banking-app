@@ -61,7 +61,10 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
-    show: false,
+    // Show the native window while the renderer loads. Waiting for
+    // `ready-to-show` can leave the app invisible if renderer startup fails.
+    show: true,
+    backgroundColor: '#10141c',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -69,13 +72,18 @@ function createWindow() {
       sandbox: true
     }
   });
+  win.maximize();
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', event => event.preventDefault());
-  win.once('ready-to-show', () => {
-    win.maximize();
-    win.show();
+  win.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`App page failed to load (${errorCode}): ${errorDescription} — ${validatedURL}`);
   });
-  win.loadFile(path.join(__dirname, 'src/index.html'));
+  win.webContents.on('render-process-gone', (_event, details) => {
+    console.error(`App renderer stopped: ${details.reason} (exit code ${details.exitCode})`);
+  });
+  win.loadFile(path.join(__dirname, 'src/index.html')).catch(error => {
+    console.error('Unable to load the app page:', error);
+  });
 }
 
 app.whenReady().then(() => {

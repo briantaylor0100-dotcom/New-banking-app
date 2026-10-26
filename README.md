@@ -21,6 +21,8 @@ New Banking App is a local-first personal finance dashboard built with Electron.
 - Transaction register with dates, payees, categories, memos, and cleared status
 - Spending and income tracking with category totals
 - Import support for common bank statement formats
+- Review imported bank and card transactions before saving, including edits and amount direction correction
+- Record credit-card payments against both the card and the account used to pay it
 - Duplicate detection while importing transactions
 - Split incoming deposits across recipients and categories while counting the deposit once
 - Local-only storage in the app data directory for privacy
@@ -46,6 +48,10 @@ Install [Node.js](https://nodejs.org/) and use the current LTS version. `npm` is
    ```
 
 On first launch, the app creates sample account data so you can explore the interface immediately. You can replace or customize those entries from inside the app.
+
+## Browser demo
+
+The GitHub Pages demo is published from the `docs/` folder: [Open the VaultCompute demo](https://briantaylor0100-dotcom.github.io/New-banking-app/). It stores demo data in that browser's local storage and now includes transaction import review and credit-card payments.
 
 ## Development check
 

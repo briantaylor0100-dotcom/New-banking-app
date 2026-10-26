@@ -251,6 +251,21 @@ button {
   gap: 12px;
   max-width: 360px;
 }
+.dashboard-actions { display: flex; gap: 8px; align-items: center; }
+.mapping-panel { margin-top: 18px; padding: 18px; background: #111827; border: 1px solid #1f2937; border-radius: 12px; }
+.reverse-import-label { display: flex; align-items: center; gap: 8px; margin: 12px 0; }
+.import-review-table-wrap { overflow: auto; max-height: 50vh; }
+.import-review-table { width: 100%; border-collapse: collapse; }
+.import-review-table th, .import-review-table td { padding: 6px; border-bottom: 1px solid #2d3748; }
+.import-review-table input { min-width: 90px; width: 100%; padding: 7px; border: 1px solid #475569; border-radius: 4px; background: #0f172a; color: #e2e8f0; }
+.import-review-actions, .card-payment-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.modal-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgba(0,0,0,.65); }
+.modal-backdrop[hidden] { display: none !important; }
+.demo-modal { width: min(500px, 100%); max-height: 90vh; overflow: auto; padding: 22px; border: 1px solid #334155; border-radius: 12px; background: #111827; box-shadow: 0 18px 45px rgba(0,0,0,.4); }
+.demo-modal header { display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid #334155; margin-bottom: 16px; }
+.demo-modal h2 { margin: 0 0 6px; }.demo-modal p { margin: 0 0 14px; color: #94a3b8; }
+.modal-close { border: 0; background: transparent; color: #e2e8f0; font-size: 28px; cursor: pointer; }
+.card-payment-form { display: grid; gap: 8px; }.card-payment-form select, .card-payment-form input { width: 100%; padding: 9px; border: 1px solid #475569; border-radius: 5px; background: #0f172a; color: #e2e8f0; }
 .report-row {
   display: flex;
   justify-content: space-between;

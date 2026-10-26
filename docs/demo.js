@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'vaultcompute-demo-state';
 const state = { accounts: [], transactions: [] };
 let selectedAccountId = null;
+let pendingReview = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
 const reportsPage = document.getElementById('reports-page');
@@ -19,9 +20,13 @@ function accountById(id) {
 
 function accountBalance(account) {
   return amount(account.openingBalance + state.transactions
-    .filter(tx => tx.accountId === account.id)
-    .reduce((sum, tx) => sum + amount(tx.receive) - amount(tx.spend), 0));
+    .filter(tx => tx.accountId === account.id || tx.paymentFromAccountId === account.id)
+    .reduce((sum, tx) => sum
+      + (tx.accountId === account.id ? amount(tx.receive) - amount(tx.spend) : 0)
+      - (tx.paymentFromAccountId === account.id ? amount(tx.paymentAmount) : 0), 0));
 }
+
+function isCreditCard(account) { return account?.accountKind === 'credit-card' || account?.type === 'debt'; }
 
 function balances() {
   return state.accounts.map(account => ({ ...account, balance: accountBalance(account) }));
@@ -100,7 +105,7 @@ function renderTransactions() {
 
   const visibleTransactions = state.transactions
     .map((tx, index) => ({ tx, index }))
-    .filter(({ tx }) => selectedAccountId === null || tx.accountId === selectedAccountId);
+    .filter(({ tx }) => selectedAccountId === null || tx.accountId === selectedAccountId || tx.paymentFromAccountId === selectedAccountId);
 
   const selectedAccount = accountById(selectedAccountId);
   document.getElementById('transaction-heading').textContent = selectedAccount
@@ -108,6 +113,9 @@ function renderTransactions() {
     : 'Recent Transactions';
 
   visibleTransactions.forEach(({ tx, index }) => {
+    const shownAsPaymentSource = Boolean(tx.paymentFromAccountId && selectedAccountId === tx.paymentFromAccountId);
+    const shownSpend = shownAsPaymentSource ? amount(tx.paymentAmount) : amount(tx.spend);
+    const shownReceive = shownAsPaymentSource ? 0 : amount(tx.receive);
     const row = document.createElement('tr');
     row.className = 'main-row';
 
@@ -141,21 +149,23 @@ function renderTransactions() {
       row.append(makeCell(tx.category));
       row.append(makeCell(tx.tag));
       row.append(makeCell(tx.cleared, 'text-center'));
-      row.append(makeCell(tx.spend > 0 ? money.format(tx.spend) : '', 'neg'));
-      row.append(makeCell(tx.receive > 0 ? money.format(tx.receive) : '', 'pos'));
-      row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
-      row.append(makeCell(accountById(tx.accountId)?.name ?? 'Unassigned'));
+      row.append(makeCell(shownSpend > 0 ? money.format(shownSpend) : '', 'neg'));
+      row.append(makeCell(shownReceive > 0 ? money.format(shownReceive) : '', 'pos'));
+      row.append(makeCell(money.format(shownReceive - shownSpend)));
+      const accountCell = makeCell(accountById(tx.accountId)?.name ?? 'Unassigned');
+      if (tx.paymentFromAccountId) accountCell.textContent += ` · paid from ${accountById(tx.paymentFromAccountId)?.name ?? 'Unassigned'}`;
+      row.append(accountCell);
 
       const action = document.createElement('td');
       action.className = 'transaction-actions';
-      const edit = document.createElement('button');
-      edit.type = 'button';
-      edit.textContent = 'Edit';
-      edit.addEventListener('click', () => {
-        tx.isEditing = true;
-        renderTransactions();
-      });
-      action.append(edit, removeButton(index));
+      if (!tx.isPayment) {
+        const edit = document.createElement('button');
+        edit.type = 'button';
+        edit.textContent = 'Edit';
+        edit.addEventListener('click', () => { tx.isEditing = true; renderTransactions(); });
+        action.append(edit);
+      }
+      action.append(removeButton(index));
       row.append(action);
     }
 
@@ -275,6 +285,7 @@ function addAccount(event) {
   state.accounts.push(account);
   selectedAccountId = account.id;
   hideAddAccountForm();
+  populateAccountSelectors();
   updateUI();
   renderTransactions();
   persist();
@@ -286,7 +297,7 @@ function generateCategoryReport() {
   const end = document.getElementById('report-end').value;
   const inRange = tx => (!start || tx.date >= start) && (!end || tx.date <= end);
 
-  const transactions = state.transactions.filter(inRange);
+  const transactions = state.transactions.filter(tx => inRange(tx) && !tx.paymentFromAccountId);
   const income = transactions.reduce((sum, tx) => sum + amount(tx.receive), 0);
   const spending = transactions.reduce((sum, tx) => sum + amount(tx.spend), 0);
 
@@ -352,6 +363,127 @@ function populateAccountSelectors() {
   state.accounts.forEach(account => importSelect.add(new Option(account.name, account.id)));
 }
 
+function openCardPayment() {
+  const cards = state.accounts.filter(isCreditCard);
+  const sources = state.accounts.filter(account => !isCreditCard(account));
+  if (!cards.length || !sources.length) return setStatus('Add a credit card and a cash account before recording a payment.', 'error');
+  const cardSelect = document.getElementById('payment-card');
+  const sourceSelect = document.getElementById('payment-source');
+  cardSelect.replaceChildren(...cards.map(account => new Option(account.name, account.id)));
+  sourceSelect.replaceChildren(...sources.map(account => new Option(account.name, account.id)));
+  if (selectedAccountId && isCreditCard(accountById(selectedAccountId))) cardSelect.value = selectedAccountId;
+  if (selectedAccountId && !isCreditCard(accountById(selectedAccountId))) sourceSelect.value = selectedAccountId;
+  document.getElementById('payment-date').value = today();
+  document.getElementById('payment-amount').value = '';
+  document.getElementById('card-payment-modal').hidden = false;
+}
+
+function closeCardPayment() { document.getElementById('card-payment-modal').hidden = true; }
+
+function saveCardPayment(event) {
+  event.preventDefault();
+  const card = accountById(document.getElementById('payment-card').value);
+  const source = accountById(document.getElementById('payment-source').value);
+  const payment = amount(document.getElementById('payment-amount').value);
+  const date = document.getElementById('payment-date').value;
+  if (!isCreditCard(card) || !source || isCreditCard(source) || payment <= 0 || !date) return setStatus('Choose a card, a cash account, a date, and a payment greater than zero.', 'error');
+  state.transactions.unshift({ id: makeId(), date, payee: `${card.name} payment`, category: 'Account transfer', tag: '', memo: 'Credit card payment', cleared: '', spend: 0, receive: payment, accountId: card.id, paymentFromAccountId: source.id, paymentAmount: payment, isPayment: true });
+  closeCardPayment(); renderTransactions(); updateUI(); persist();
+  setStatus(`${money.format(payment)} payment recorded for ${card.name}.`, 'success');
+}
+
+function parseImportAmount(value) {
+  const text = safeText(value).trim();
+  const negativeParens = /^\(.*\)$/.test(text);
+  const number = Number(text.replace(/[,$\s]/g, '').replace(/[()]/g, ''));
+  return amount(negativeParens ? -Math.abs(number) : number);
+}
+
+function csvToRows(text) {
+  const rows = []; let row = []; let field = ''; let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i], next = text[i + 1];
+    if (char === '"' && quoted && next === '"') { field += '"'; i += 1; }
+    else if (char === '"') quoted = !quoted;
+    else if (char === ',' && !quoted) { row.push(field.trim()); field = ''; }
+    else if ((char === '\n' || char === '\r') && !quoted) { if (char === '\r' && next === '\n') i += 1; row.push(field.trim()); if (row.some(Boolean)) rows.push(row); row = []; field = ''; }
+    else field += char;
+  }
+  if (field || row.length) { row.push(field.trim()); rows.push(row); }
+  return rows;
+}
+
+function parseDemoImport(text) {
+  if (/<STMTTRN>/i.test(text)) {
+    return text.split(/<STMTTRN>/i).slice(1).map((record, index) => {
+      const get = tag => record.match(new RegExp(`<${tag}>([^<\\r\\n]*)`, 'i'))?.[1]?.trim() || '';
+      const signed = parseImportAmount(get('TRNAMT')); const rawDate = get('DTPOSTED').slice(0, 8);
+      const date = /^\d{8}$/.test(rawDate) ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}` : today();
+      return { id: get('FITID') || `ofx-${index}`, fitId: get('FITID'), date, payee: get('NAME') || 'Unknown Payee', memo: get('MEMO'), spend: signed < 0 ? -signed : 0, receive: signed > 0 ? signed : 0 };
+    });
+  }
+  const rows = csvToRows(text); if (rows.length < 2) return [];
+  const headings = rows.shift().map(value => value.toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const col = names => headings.findIndex(value => names.includes(value));
+  const dateCol = col(['date', 'transactiondate']), payeeCol = col(['description', 'payee', 'name', 'merchant']);
+  const amountCol = col(['amount', 'transactionamount']), debitCol = col(['debit', 'withdrawal', 'withdrawals']), creditCol = col(['credit', 'deposit', 'deposits']);
+  const memoCol = col(['memo', 'notes']); const fitCol = col(['fitid', 'transactionid']);
+  if (dateCol < 0 || payeeCol < 0 || (amountCol < 0 && debitCol < 0 && creditCol < 0)) return [];
+  return rows.map((record, index) => {
+    const signed = amountCol >= 0 ? parseImportAmount(record[amountCol]) : 0;
+    const debit = debitCol >= 0 ? Math.abs(parseImportAmount(record[debitCol])) : 0;
+    const credit = creditCol >= 0 ? Math.abs(parseImportAmount(record[creditCol])) : 0;
+    return { id: `csv-${index}`, fitId: fitCol >= 0 ? record[fitCol] : '', date: record[dateCol] || today(), payee: record[payeeCol] || 'Unknown Payee', memo: memoCol >= 0 ? record[memoCol] : '', spend: debit || (signed < 0 ? -signed : 0), receive: credit || (signed > 0 ? signed : 0) };
+  });
+}
+
+function showImportReview(parsed, fileName) {
+  if (!parsed.length) return setStatus(`No transactions found in ${fileName}. Check its format.`, 'error');
+  pendingReview = { parsed, fileName };
+  const account = accountById(document.getElementById('import-account').value);
+  document.getElementById('import-review-summary').textContent = `${fileName} · ${parsed.length} transactions · Account: ${account?.name || 'not selected'}`;
+  document.getElementById('reverse-import-amounts').checked = false;
+  const body = document.getElementById('import-review-rows'); body.replaceChildren();
+  parsed.forEach((tx, index) => {
+    const row = document.createElement('tr'); row.dataset.index = index;
+    for (const [field, type, value] of [['date', 'date', tx.date || today()], ['payee', 'text', tx.payee], ['spend', 'number', amount(tx.spend) || ''], ['receive', 'number', amount(tx.receive) || ''], ['memo', 'text', tx.memo]]) {
+      const cell = document.createElement('td'); const input = document.createElement('input'); input.type = type; input.dataset.field = field; input.value = safeText(value);
+      if (type === 'number') { input.min = '0'; input.step = '0.01'; }
+      cell.append(input); row.append(cell);
+    }
+    const cell = document.createElement('td'); const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'remove-btn'; remove.textContent = 'Remove'; remove.addEventListener('click', () => row.remove()); cell.append(remove); row.append(cell); body.append(row);
+  });
+  document.getElementById('import-review-panel').hidden = false;
+}
+
+function reverseDemoImportAmounts() {
+  document.querySelectorAll('#import-review-rows tr').forEach(row => {
+    const spend = row.querySelector('[data-field="spend"]'), receive = row.querySelector('[data-field="receive"]');
+    [spend.value, receive.value] = [receive.value, spend.value];
+  });
+}
+
+function saveDemoImport() {
+  if (!pendingReview) return;
+  const parsed = [...document.querySelectorAll('#import-review-rows tr')].map(row => {
+    const original = pendingReview.parsed[Number(row.dataset.index)];
+    const value = field => row.querySelector(`[data-field="${field}"]`).value;
+    return { ...original, date: value('date'), payee: value('payee').trim(), memo: value('memo').trim(), spend: amount(value('spend')), receive: amount(value('receive')) };
+  });
+  if (!parsed.length || parsed.some(tx => !tx.date || !tx.payee || (tx.spend > 0 && tx.receive > 0))) return setStatus('Keep a row with a date and description, and choose spend or receive for each row.', 'error');
+  const accountId = document.getElementById('import-account').value;
+  const keys = new Set(state.transactions.map(tx => tx.fitId ? `fit:${tx.fitId}` : `${tx.accountId}|${tx.date}|${tx.payee}|${tx.spend}|${tx.receive}`));
+  let added = 0, skipped = 0;
+  parsed.forEach(tx => {
+    const key = tx.fitId ? `fit:${tx.fitId}` : `${accountId}|${tx.date}|${tx.payee}|${tx.spend}|${tx.receive}`;
+    if (keys.has(key)) { skipped += 1; return; }
+    keys.add(key); state.transactions.push({ ...tx, id: makeId(), accountId, category: 'Imported', tag: '', cleared: 'c', isEditing: false }); added += 1;
+  });
+  pendingReview = null; document.getElementById('import-review-panel').hidden = true;
+  state.transactions.sort((a, b) => b.date.localeCompare(a.date)); renderTransactions(); updateUI(); persist(); showPage('dashboard');
+  setStatus(`Imported ${added}; skipped ${skipped} duplicate transactions.`, 'success');
+}
+
 function bootstrapSampleData() {
   const saved = localStorage.getItem(STORAGE_KEY);
   if (saved) {
@@ -386,6 +518,11 @@ function initDemo() {
   renderTransactions();
 
   document.getElementById('add-transaction-btn').addEventListener('click', addTransaction);
+  document.getElementById('pay-credit-card-btn').addEventListener('click', openCardPayment);
+  document.getElementById('card-payment-form').addEventListener('submit', saveCardPayment);
+  document.getElementById('close-card-payment-btn').addEventListener('click', closeCardPayment);
+  document.getElementById('cancel-card-payment-btn').addEventListener('click', closeCardPayment);
+  document.getElementById('card-payment-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCardPayment(); });
   document.getElementById('all-accounts-btn').addEventListener('click', () => {
     selectedAccountId = null;
     renderTransactions();
@@ -395,7 +532,21 @@ function initDemo() {
   document.getElementById('cancel-add-account-btn').addEventListener('click', hideAddAccountForm);
   document.getElementById('add-account-form').addEventListener('submit', addAccount);
   document.getElementById('refresh-report-btn').addEventListener('click', generateCategoryReport);
-  document.getElementById('select-file-btn').addEventListener('click', () => setStatus('Demo mode: file import is shown for the desktop app and will work in the Electron version.', 'success'));
+  document.getElementById('select-file-btn').addEventListener('click', async () => {
+    const file = document.getElementById('demo-import-file').files[0];
+    if (!file) return setStatus('Choose a statement file first.', 'error');
+    try { showImportReview(parseDemoImport(await file.text()), file.name); }
+    catch (error) { setStatus(`Could not read ${file.name}: ${error.message}`, 'error'); }
+  });
+  document.getElementById('save-import-review-btn').addEventListener('click', saveDemoImport);
+  document.getElementById('cancel-import-review-btn').addEventListener('click', () => { pendingReview = null; document.getElementById('import-review-panel').hidden = true; });
+  document.getElementById('reverse-import-amounts').addEventListener('change', reverseDemoImportAmounts);
+  document.getElementById('import-account').addEventListener('change', () => {
+    if (!pendingReview) return;
+    const account = accountById(document.getElementById('import-account').value);
+    document.getElementById('import-review-summary').textContent = `${pendingReview.fileName} · ${pendingReview.parsed.length} transactions · Account: ${account?.name || 'not selected'}`;
+  });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeCardPayment(); });
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Demo ready.', 'success');
 }

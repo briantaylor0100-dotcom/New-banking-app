@@ -7,6 +7,7 @@ const DEFAULT_CATEGORY_TYPES = {
 let state = { accounts: [], transactions: [], categoryTypes: DEFAULT_CATEGORY_TYPES, planning: { safetyBuffer: 0, goalReserve: 0 }, importTemplates: [] };
 let selectedAccountId = null;
 let pendingImport = null;
+let pendingReview = null;
 let openSplitTransactionId = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
@@ -22,10 +23,13 @@ const today = () => new Date().toISOString().slice(0, 10);
 const makeId = () => crypto.randomUUID();
 
 function accountById(id) { return state.accounts.find(account => account.id === id); }
+function isCreditCard(account) { return account?.accountKind === 'credit-card' || account?.type === 'debt'; }
 function accountBalance(account) {
   return amount(account.openingBalance + state.transactions
-    .filter(tx => tx.accountId === account.id)
-    .reduce((sum, tx) => sum + amount(tx.receive) - amount(tx.spend), 0));
+    .filter(tx => tx.accountId === account.id || tx.paymentFromAccountId === account.id)
+    .reduce((sum, tx) => sum
+      + (tx.accountId === account.id ? amount(tx.receive) - amount(tx.spend) : 0)
+      - (tx.paymentFromAccountId === account.id ? amount(tx.paymentAmount) : 0), 0));
 }
 function balances() {
   return state.accounts.map(account => ({ ...account, balance: accountBalance(account) }));
@@ -55,10 +59,10 @@ function inputCell(type, value, className = '') {
   input.type = type; input.value = safeText(value); input.className = className || 'edit-input';
   cell.appendChild(input); return cell;
 }
-function accountSelect(value) {
+function accountSelect(value, accounts = state.accounts) {
   const select = document.createElement('select');
   select.className = 'edit-input';
-  state.accounts.forEach(account => {
+  accounts.forEach(account => {
     const option = new Option(account.name, account.id, false, account.id === value);
     select.add(option);
   });
@@ -135,7 +139,7 @@ function daysBetween(a, b) { return Math.round((new Date(`${b}T12:00:00`) - new 
 function normalizedPayee(value) { return safeText(value).toLowerCase().replace(/\d+/g, '').replace(/[^a-z]/g, ' ').replace(/\s+/g, ' ').trim(); }
 function recurringPatterns() {
   const groups = new Map();
-  state.transactions.filter(tx => tx.date && (amount(tx.spend) || amount(tx.receive))).forEach(tx => {
+  state.transactions.filter(tx => tx.date && (amount(tx.spend) || amount(tx.receive)) && !tx.paymentFromAccountId).forEach(tx => {
     const key = `${normalizedPayee(tx.payee)}|${amount(tx.receive) > 0 ? 'income' : 'expense'}`;
     if (!normalizedPayee(tx.payee)) return;
     const list = groups.get(key) || []; list.push(tx); groups.set(key, list);
@@ -187,12 +191,15 @@ function renderTransactions() {
   body.replaceChildren();
   const visibleTransactions = state.transactions
     .map((tx, index) => ({ tx, index }))
-    .filter(({ tx }) => selectedAccountId === null || tx.accountId === selectedAccountId);
+    .filter(({ tx }) => selectedAccountId === null || tx.accountId === selectedAccountId || tx.paymentFromAccountId === selectedAccountId);
   const selectedAccount = accountById(selectedAccountId);
   document.getElementById('transaction-heading').textContent = selectedAccount
     ? `${selectedAccount.name} Transactions`
     : 'Recent Transactions';
   visibleTransactions.forEach(({ tx, index }) => {
+    const shownAsPaymentSource = Boolean(tx.paymentFromAccountId && selectedAccountId === tx.paymentFromAccountId);
+    const shownSpend = shownAsPaymentSource ? amount(tx.paymentAmount) : amount(tx.spend);
+    const shownReceive = shownAsPaymentSource ? 0 : amount(tx.receive);
     const row = document.createElement('tr'); row.className = 'main-row';
     if (tx.isEditing) {
       row.append(inputCell('date', tx.date));
@@ -203,7 +210,16 @@ function renderTransactions() {
       row.append(inputCell('number', tx.spend));
       row.append(inputCell('number', tx.receive));
       row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
-      const accountCell = document.createElement('td'); accountCell.append(accountSelect(tx.accountId)); row.append(accountCell);
+      const accountCell = document.createElement('td');
+      accountCell.append(accountSelect(tx.accountId));
+      if (accountById(tx.accountId)?.accountKind === 'credit-card' && amount(tx.spend) > 0) {
+        const paymentSelect = accountSelect(tx.paymentFromAccountId || '', state.accounts.filter(item => item.id !== tx.accountId));
+        paymentSelect.insertBefore(new Option('Paid from…', ''), paymentSelect.firstChild);
+        paymentSelect.value = tx.paymentFromAccountId || '';
+        paymentSelect.classList.add('payment-source-select');
+        accountCell.append(paymentSelect);
+      }
+      row.append(accountCell);
       const action = document.createElement('td'); action.className = 'transaction-actions';
       const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Save';
       save.addEventListener('click', () => saveRow(index, row));
@@ -212,15 +228,18 @@ function renderTransactions() {
       row.append(makeCell(tx.date));
       const payee = makeCell(tx.payee); payee.className = 'payee'; row.append(payee);
       row.append(makeCell(tx.splits?.length ? `Split · ${tx.splits.length} parts` : tx.category)); row.append(makeCell(tx.tag)); row.append(makeCell(tx.cleared, 'text-center'));
-      row.append(makeCell(tx.spend > 0 ? money.format(tx.spend) : '', 'neg'));
-      row.append(makeCell(tx.receive > 0 ? money.format(tx.receive) : '', 'pos'));
-      row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
+      row.append(makeCell(shownSpend > 0 ? money.format(shownSpend) : '', 'neg'));
+      row.append(makeCell(shownReceive > 0 ? money.format(shownReceive) : '', 'pos'));
+      row.append(makeCell(money.format(shownReceive - shownSpend)));
       row.append(makeCell(accountById(tx.accountId)?.name ?? 'Unassigned'));
+      if (tx.paymentFromAccountId) row.cells[8].textContent += ` · paid from ${accountById(tx.paymentFromAccountId)?.name ?? 'Unassigned'}`;
       const action = document.createElement('td'); action.className = 'transaction-actions';
-      const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
-      edit.addEventListener('click', () => { tx.isEditing = true; renderTransactions(); });
-      action.append(edit);
-      if (amount(tx.receive) > 0 && amount(tx.spend) === 0) {
+      if (!tx.isPayment) {
+        const edit = document.createElement('button'); edit.type = 'button'; edit.textContent = 'Edit';
+        edit.addEventListener('click', () => { tx.isEditing = true; renderTransactions(); });
+        action.append(edit);
+      }
+      if (!tx.isPayment && amount(tx.receive) > 0 && amount(tx.spend) === 0) {
         const split = document.createElement('button'); split.type = 'button'; split.textContent = tx.splits?.length ? 'Edit split' : 'Split';
         split.addEventListener('click', () => openSplitEditor(index)); action.append(split);
       }
@@ -267,6 +286,7 @@ function saveRow(index, row) {
   const fields = row.querySelectorAll('input, select');
   const memo = row.nextElementSibling.querySelector('input');
   const [date, payee, category, tag, cleared, spend, receive, account] = fields;
+  const paymentSource = row.querySelector('.payment-source-select');
   const outgoing = amount(spend.value), incoming = amount(receive.value);
   if (!date.value || !payee.value.trim() || (outgoing > 0 && incoming > 0) || (outgoing < 0 || incoming < 0)) {
     setStatus('Enter a date and payee, with either a non-negative spend or receive amount.', 'error'); return;
@@ -275,7 +295,11 @@ function saveRow(index, row) {
   if (existing.splits?.length && Math.round(incoming * 100) !== splitTotalCents(existing)) {
     setStatus('Update the split before changing this deposit amount.', 'error'); return;
   }
-  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, memo: memo.value.trim(), isEditing: false });
+  const isCardPayment = accountById(account.value)?.accountKind === 'credit-card' && outgoing > 0;
+  if (isCardPayment && (!paymentSource?.value || paymentSource.value === account.value)) {
+    setStatus('Choose a different account to pay this credit card transaction from.', 'error'); return;
+  }
+  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, paymentFromAccountId: isCardPayment ? paymentSource.value : null, paymentAmount: isCardPayment ? outgoing : 0, memo: memo.value.trim(), isEditing: false });
   renderTransactions(); updateUI(); persist();
 }
 
@@ -284,6 +308,51 @@ function addTransaction() {
   const firstCategory = state.categoryTypes[firstType]?.[0];
   state.transactions.unshift({ id: makeId(), date: today(), payee: '', category: firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized', tag: '', memo: '', cleared: '', spend: 0, receive: 0, accountId: selectedAccountId || state.accounts[0]?.id, isEditing: true });
   renderTransactions();
+}
+
+function openCardPayment() {
+  const cards = state.accounts.filter(isCreditCard);
+  const sources = state.accounts.filter(account => !isCreditCard(account));
+  if (!cards.length || !sources.length) {
+    setStatus('Add a credit card and a cash account before recording a card payment.', 'error');
+    return;
+  }
+  const cardSelect = document.getElementById('payment-card');
+  const sourceSelect = document.getElementById('payment-source');
+  cardSelect.replaceChildren(...cards.map(account => new Option(account.name, account.id)));
+  sourceSelect.replaceChildren(...sources.map(account => new Option(account.name, account.id)));
+  if (selectedAccountId && isCreditCard(accountById(selectedAccountId))) cardSelect.value = selectedAccountId;
+  if (selectedAccountId && !isCreditCard(accountById(selectedAccountId))) sourceSelect.value = selectedAccountId;
+  document.getElementById('payment-date').value = today();
+  document.getElementById('payment-amount').value = '';
+  document.getElementById('card-payment-modal').hidden = false;
+  document.getElementById('payment-amount').focus();
+}
+
+function closeCardPayment() {
+  document.getElementById('card-payment-modal').hidden = true;
+}
+
+async function saveCardPayment(event) {
+  event.preventDefault();
+  const card = accountById(document.getElementById('payment-card').value);
+  const source = accountById(document.getElementById('payment-source').value);
+  const payment = amount(document.getElementById('payment-amount').value);
+  const date = document.getElementById('payment-date').value;
+  if (!isCreditCard(card) || !source || isCreditCard(source) || payment <= 0 || !date) {
+    setStatus('Choose a credit card, a cash account, a date, and a payment greater than zero.', 'error');
+    return;
+  }
+  state.transactions.unshift({
+    id: makeId(), date, payee: `${card.name} payment`, category: 'Transfers::Account transfer',
+    tag: '', memo: 'Credit card payment', cleared: '', spend: 0, receive: payment,
+    accountId: card.id, paymentFromAccountId: source.id, paymentAmount: payment, isEditing: false
+  });
+  closeCardPayment();
+  renderTransactions();
+  updateUI();
+  await persist();
+  setStatus(`${money.format(payment)} payment recorded for ${card.name}.`, 'success');
 }
 
 function openSplitEditor(index) {
@@ -361,6 +430,7 @@ async function addAccount(event) {
   state.accounts.push(account);
   selectedAccountId = account.id;
   hideAddAccountForm();
+  populateAccountSelectors();
   updateUI();
   renderTransactions();
   await persist();
@@ -412,7 +482,7 @@ function parseOfx(text) {
 async function importBankFile() {
   const selected = await window.vault.selectBankFile();
   if (!selected) return;
-  if (/<OFX|<STMTTRN>/i.test(selected.content)) return await finishImport(parseOfx(selected.content), selected.name);
+  if (/<OFX|<STMTTRN>/i.test(selected.content)) return showImportReview(parseOfx(selected.content), selected.name);
   const rows = csvRows(selected.content);
   if (rows.length < 2) { setStatus(`No transactions found in ${selected.name}. Check its format.`, 'error'); return; }
   pendingImport = { name: selected.name, rows };
@@ -442,6 +512,57 @@ function renderMappingInterface(rows, name) {
   document.getElementById('mapping-template-name').value = template?.name || '';
   document.getElementById('mapping-panel').hidden = false;
 }
+function showImportReview(parsed, name) {
+  if (!parsed.length) { setStatus(`No transactions found in ${name}. Check its format.`, 'error'); return; }
+  pendingReview = { parsed, name };
+  document.getElementById('mapping-panel').hidden = true;
+  document.getElementById('import-review-summary').textContent = `${name} · ${parsed.length} transaction${parsed.length === 1 ? '' : 's'} · Account: ${accountById(document.getElementById('import-account').value)?.name || 'not selected'}`;
+  document.getElementById('reverse-import-amounts').checked = false;
+  const holder = document.getElementById('import-review-rows');
+  holder.replaceChildren();
+  parsed.forEach((tx, index) => {
+    const row = document.createElement('tr'); row.dataset.index = index;
+    const addInput = (key, type, value) => {
+      const cell = document.createElement('td'); const input = document.createElement('input');
+      input.type = type; input.dataset.field = key; input.value = safeText(value);
+      if (type === 'number') { input.min = '0'; input.step = '0.01'; input.inputMode = 'decimal'; }
+      cell.append(input); row.append(cell);
+    };
+    addInput('date', 'date', tx.date || today());
+    addInput('payee', 'text', tx.payee);
+    addInput('spend', 'number', amount(tx.spend) || '');
+    addInput('receive', 'number', amount(tx.receive) || '');
+    addInput('memo', 'text', tx.memo);
+    const removeCell = document.createElement('td'); const remove = document.createElement('button');
+    remove.type = 'button'; remove.className = 'remove-btn'; remove.textContent = 'Remove';
+    remove.addEventListener('click', () => row.remove()); removeCell.append(remove); row.append(removeCell);
+    holder.append(row);
+  });
+  document.getElementById('import-review-panel').hidden = false;
+}
+function reverseImportAmounts() {
+  document.querySelectorAll('#import-review-rows tr').forEach(row => {
+    const spend = row.querySelector('[data-field="spend"]');
+    const receive = row.querySelector('[data-field="receive"]');
+    [spend.value, receive.value] = [receive.value, spend.value];
+  });
+}
+async function saveImportReview() {
+  if (!pendingReview) return;
+  const parsed = [...document.querySelectorAll('#import-review-rows tr')].map(row => {
+    const index = Number(row.dataset.index), original = pendingReview.parsed[index];
+    const value = field => row.querySelector(`[data-field="${field}"]`).value;
+    return { ...original, date: value('date'), payee: value('payee').trim(), memo: value('memo').trim(), spend: amount(value('spend')), receive: amount(value('receive')) };
+  });
+  if (!parsed.length) { setStatus('Keep at least one transaction to import.', 'error'); return; }
+  if (parsed.some(tx => !tx.date || !tx.payee || (tx.spend > 0 && tx.receive > 0))) {
+    setStatus('Each row needs a date and description, with either spend or receive (not both).', 'error'); return;
+  }
+  const { name } = pendingReview;
+  pendingReview = null;
+  document.getElementById('import-review-panel').hidden = true;
+  await finishImport(parsed, name);
+}
 function inferColumn(headings, field) { const aliases = { date: ['date', 'transactiondate'], description: ['description', 'payee', 'name'], amount: ['amount', 'transactionamount'], debit: ['debit', 'withdrawal'], credit: ['credit', 'deposit'], memo: ['memo', 'notes'] }; const index = headings.findIndex(h => aliases[field].includes(safeText(h).toLowerCase().replace(/[^a-z]/g, ''))); return index < 0 ? '' : index; }
 async function confirmMappedImport() {
   if (!pendingImport) return; const mapping = Object.fromEntries([...document.querySelectorAll('#mapping-fields select')].map(select => [select.dataset.field, select.value]));
@@ -450,13 +571,13 @@ async function confirmMappedImport() {
   if (name) { state.importTemplates = (state.importTemplates || []).filter(template => template.name !== name); state.importTemplates.push({ name, headers: pendingImport.rows[0], mapping }); await persist(); }
   const [headers, ...records] = pendingImport.rows; const value = (record, field) => mapping[field] === '' ? '' : record[Number(mapping[field])] || '';
   const parsed = records.filter(record => record.some(Boolean)).map((record, index) => { const signed = amount(value(record, 'amount')); const debit = amount(value(record, 'debit')); const credit = amount(value(record, 'credit')); return { id: `mapped-${index}`, date: value(record, 'date') || today(), payee: value(record, 'description') || 'Unknown Payee', memo: value(record, 'memo'), spend: debit || (signed < 0 ? Math.abs(signed) : 0), receive: credit || (signed > 0 ? signed : 0) }; });
-  document.getElementById('mapping-panel').hidden = true; pendingImport = null; await finishImport(parsed, name || 'mapped statement');
+  pendingImport = null; showImportReview(parsed, name || 'mapped statement');
 }
 
 function generateCategoryReport() {
   const start = document.getElementById('report-start').value, end = document.getElementById('report-end').value;
   const inRange = tx => (!start || tx.date >= start) && (!end || tx.date <= end);
-  const transactions = state.transactions.filter(inRange);
+  const transactions = state.transactions.filter(tx => inRange(tx) && !tx.paymentFromAccountId);
   const income = transactions.reduce((sum, tx) => sum + amount(tx.receive), 0);
   const spending = transactions.reduce((sum, tx) => sum + amount(tx.spend), 0);
   const summarize = field => transactions.reduce((totals, tx) => {
@@ -563,10 +684,15 @@ async function start() {
   state.categoryTypes = normalizedCategoryTypes(state.categoryTypes);
   state.planning = { safetyBuffer: amount(state.planning?.safetyBuffer), goalReserve: amount(state.planning?.goalReserve) };
   state.importTemplates = Array.isArray(state.importTemplates) ? state.importTemplates : [];
-  state.transactions = state.transactions.map(tx => ({ ...tx, id: tx.id || makeId(), accountId: tx.accountId || state.accounts[0]?.id, isEditing: false, spend: amount(tx.spend), receive: amount(tx.receive) }));
+  state.transactions = state.transactions.map(tx => ({ ...tx, id: tx.id || makeId(), accountId: tx.accountId || state.accounts[0]?.id, isEditing: false, spend: amount(tx.spend), receive: amount(tx.receive), paymentAmount: amount(tx.paymentAmount) }));
   showPage('dashboard');
   populateAccountSelectors(); updateUI(); renderTransactions();
   document.getElementById('add-transaction-btn').addEventListener('click', addTransaction);
+  document.getElementById('pay-credit-card-btn').addEventListener('click', openCardPayment);
+  document.getElementById('card-payment-form').addEventListener('submit', saveCardPayment);
+  document.getElementById('close-card-payment-btn').addEventListener('click', closeCardPayment);
+  document.getElementById('cancel-card-payment-btn').addEventListener('click', closeCardPayment);
+  document.getElementById('card-payment-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCardPayment(); });
   document.getElementById('all-accounts-btn').addEventListener('click', () => {
     selectedAccountId = null;
     renderTransactions();
@@ -578,6 +704,14 @@ async function start() {
   document.getElementById('select-file-btn').addEventListener('click', importBankFile);
   document.getElementById('confirm-import-btn').addEventListener('click', confirmMappedImport);
   document.getElementById('cancel-import-btn').addEventListener('click', () => { pendingImport = null; document.getElementById('mapping-panel').hidden = true; });
+  document.getElementById('save-import-review-btn').addEventListener('click', saveImportReview);
+  document.getElementById('cancel-import-review-btn').addEventListener('click', () => { pendingReview = null; document.getElementById('import-review-panel').hidden = true; });
+  document.getElementById('reverse-import-amounts').addEventListener('change', reverseImportAmounts);
+  document.getElementById('import-account').addEventListener('change', () => {
+    if (!pendingReview) return;
+    const account = accountById(document.getElementById('import-account').value);
+    document.getElementById('import-review-summary').textContent = `${pendingReview.name} · ${pendingReview.parsed.length} transaction${pendingReview.parsed.length === 1 ? '' : 's'} · Account: ${account?.name || 'not selected'}`;
+  });
   document.getElementById('safety-plan-form').addEventListener('submit', async event => { event.preventDefault(); state.planning = { safetyBuffer: amount(document.getElementById('safety-buffer').value), goalReserve: amount(document.getElementById('goal-reserve').value) }; updateUI(); await persist(); setStatus('Safe-to-spend plan saved.', 'success'); });
   document.getElementById('update-forecast-btn').addEventListener('click', renderForecast);
   document.getElementById('forecast-days').addEventListener('change', renderForecast);
@@ -591,7 +725,7 @@ async function start() {
   document.getElementById('done-categories-btn').addEventListener('click', closeCategoryManager);
   document.getElementById('category-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryManager(); });
   document.getElementById('add-category-form').addEventListener('submit', addCategory);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCategoryManager(); closeSplitEditor(); } });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCategoryManager(); closeSplitEditor(); closeCardPayment(); } });
   window.vault.onOpenCategoryManager(openCategoryManager);
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Ready.', 'success');
