@@ -54,7 +54,6 @@
                     <h1>Dashboard</h1>
                     <div class="dashboard-actions">
                         <button id="pay-credit-card-btn" class="secondary-btn" type="button">Pay credit card</button>
-                        <button id="add-transaction-btn" class="primary-btn" type="button">+ New Transaction</button>
                     </div>
                 </header>
                 <p id="app-status" role="status" aria-live="polite"></p>
@@ -219,6 +218,18 @@
                 <input id="category-name-input" maxlength="50" placeholder="e.g. Groceries" required></div>
                 <button class="primary-btn" type="submit">Add category</button>
                 <button id="done-categories-btn" class="secondary-btn" type="button">Done</button>
+            </form>
+        </section>
+    </div>
+    <div id="category-picker-modal" class="modal-backdrop" hidden>
+        <section class="category-modal category-picker-modal" role="dialog" aria-modal="true" aria-labelledby="category-picker-title">
+            <header class="modal-header"><div><h2 id="category-picker-title">Choose a category</h2><p>Select a saved category or add a new one.</p></div><button id="close-category-picker-btn" class="modal-close" type="button" aria-label="Close">×</button></header>
+            <div id="category-picker-options" class="category-picker-options"></div>
+            <form id="add-picker-category-form" class="picker-category-form">
+                <h3>Add a category</h3>
+                <label for="picker-category-type">Category group</label><input id="picker-category-type" list="picker-category-types" maxlength="50" required><datalist id="picker-category-types"></datalist>
+                <label for="picker-category-name">Category name</label><input id="picker-category-name" maxlength="50" required>
+                <button class="primary-btn" type="submit">Add and select category</button>
             </form>
         </section>
     </div>

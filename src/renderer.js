@@ -9,6 +9,7 @@ let selectedAccountId = null;
 let pendingImport = null;
 let pendingReview = null;
 let openSplitTransactionId = null;
+let categoryPickerCallback = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
 const reportsPage = document.getElementById('reports-page');
@@ -19,7 +20,7 @@ const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'U
 
 const safeText = value => String(value ?? '');
 const amount = value => Number.isFinite(Number(value)) ? Math.round(Number(value) * 100) / 100 : 0;
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
 const makeId = () => crypto.randomUUID();
 
 function accountById(id) { return state.accounts.find(account => account.id === id); }
@@ -90,6 +91,56 @@ function categorySelect(value) {
     select.append(group);
   });
   return select;
+}
+function categoryPickerButton(value, onSelect) {
+  const button = document.createElement('button');
+  button.type = 'button'; button.className = 'category-picker-trigger';
+  button.dataset.category = value || '';
+  button.textContent = value ? splitCategoryLabel(value) : 'Choose category…';
+  button.addEventListener('click', () => openCategoryPicker(button.dataset.category, onSelect));
+  return button;
+}
+function openCategoryPicker(value, onSelect) {
+  categoryPickerCallback = onSelect;
+  const holder = document.getElementById('category-picker-options'); holder.replaceChildren();
+  Object.entries(state.categoryTypes).sort(([a], [b]) => a.localeCompare(b)).forEach(([type, categories]) => {
+    const group = document.createElement('section'); group.className = 'category-picker-group';
+    const heading = document.createElement('h3'); heading.textContent = type; group.append(heading);
+    categories.forEach(category => {
+      const option = document.createElement('button'); option.type = 'button'; option.className = 'category-picker-option';
+      const categoryValueText = categoryValue(type, category); option.textContent = category;
+      option.classList.toggle('selected', categoryValueText === value);
+      option.addEventListener('click', () => selectPickerCategory(categoryValueText)); group.append(option);
+    });
+    holder.append(group);
+  });
+  if (!holder.childElementCount) holder.textContent = 'No categories yet. Add one below.';
+  const typeInput = document.getElementById('picker-category-type');
+  const typeList = document.getElementById('picker-category-types'); typeList.replaceChildren(...Object.keys(state.categoryTypes).map(type => new Option(type, type)));
+  typeInput.value = Object.keys(state.categoryTypes)[0] || '';
+  document.getElementById('picker-category-name').value = '';
+  document.getElementById('category-picker-modal').hidden = false;
+}
+function selectPickerCategory(value) {
+  categoryPickerCallback?.(value);
+  categoryPickerCallback = null;
+  document.getElementById('category-picker-modal').hidden = true;
+}
+async function addPickerCategory(event) {
+  event.preventDefault();
+  const type = document.getElementById('picker-category-type').value.trim();
+  const name = document.getElementById('picker-category-name').value.trim();
+  if (!type || !name) return;
+  state.categoryTypes[type] = state.categoryTypes[type] || [];
+  const existing = state.categoryTypes[type].find(item => item.toLocaleLowerCase() === name.toLocaleLowerCase());
+  if (!existing) state.categoryTypes[type].push(name);
+  await persist();
+  selectPickerCategory(categoryValue(type, existing || name));
+  setStatus(`${existing || name} added to ${type}.`, 'success');
+}
+function closeCategoryPicker() {
+  document.getElementById('category-picker-modal').hidden = true;
+  categoryPickerCallback = null;
 }
 function splitTotalCents(tx) { return Math.round(amount(tx.receive) * 100); }
 function renderSplitRows(tx) {
@@ -189,6 +240,7 @@ function renderAccountList(currentAccounts = balances()) {
 function renderTransactions() {
   const body = document.getElementById('transaction-body');
   body.replaceChildren();
+  renderQuickEntryRow(body);
   const visibleTransactions = state.transactions
     .map((tx, index) => ({ tx, index }))
     .filter(({ tx }) => selectedAccountId === null || tx.accountId === selectedAccountId || tx.paymentFromAccountId === selectedAccountId);
@@ -202,16 +254,18 @@ function renderTransactions() {
     const shownReceive = shownAsPaymentSource ? 0 : amount(tx.receive);
     const row = document.createElement('tr'); row.className = 'main-row';
     if (tx.isEditing) {
-      row.append(inputCell('date', tx.date));
-      row.append(inputCell('text', tx.payee));
-      const categoryCell = document.createElement('td'); categoryCell.append(categorySelect(tx.category)); row.append(categoryCell);
-      row.append(inputCell('text', tx.tag));
-      row.append(inputCell('text', tx.cleared, 'edit-small'));
-      row.append(inputCell('number', tx.spend));
-      row.append(inputCell('number', tx.receive));
+      row.append(inputCell('date', tx.date, 'edit-input tx-date'));
+      row.append(inputCell('text', tx.payee, 'edit-input tx-payee'));
+      const categoryCell = document.createElement('td');
+      categoryCell.append(categoryPickerButton(tx.category, value => { const picker = categoryCell.querySelector('.category-picker-trigger'); picker.dataset.category = value; picker.textContent = splitCategoryLabel(value); }));
+      row.append(categoryCell);
+      row.append(inputCell('text', tx.tag, 'edit-input tx-tag'));
+      row.append(inputCell('text', tx.cleared, 'edit-input edit-small tx-cleared'));
+      row.append(inputCell('number', tx.spend, 'edit-input tx-spend'));
+      row.append(inputCell('number', tx.receive, 'edit-input tx-receive'));
       row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
       const accountCell = document.createElement('td');
-      accountCell.append(accountSelect(tx.accountId));
+      const accountInput = accountSelect(tx.accountId); accountInput.classList.add('tx-account'); accountCell.append(accountInput);
       if (accountById(tx.accountId)?.accountKind === 'credit-card' && amount(tx.spend) > 0) {
         const paymentSelect = accountSelect(tx.paymentFromAccountId || '', state.accounts.filter(item => item.id !== tx.accountId));
         paymentSelect.insertBefore(new Option('Paid from…', ''), paymentSelect.firstChild);
@@ -247,7 +301,7 @@ function renderTransactions() {
     }
     const memoRow = document.createElement('tr'); memoRow.className = 'memo-row';
     const memo = document.createElement('td'); memo.colSpan = 10;
-    if (tx.isEditing) { const input = document.createElement('input'); input.type = 'text'; input.value = safeText(tx.memo); input.className = 'edit-input memo-edit'; input.placeholder = 'Enter memo'; memo.append(input); }
+    if (tx.isEditing) { const input = document.createElement('input'); input.type = 'text'; input.value = safeText(tx.memo); input.className = 'edit-input memo-edit tx-memo'; input.placeholder = 'Enter memo'; memo.append(input); }
     else memo.textContent = tx.memo || 'No memo';
     memoRow.append(memo); body.append(row, memoRow);
     if (!tx.isEditing && tx.splits?.length) {
@@ -257,6 +311,48 @@ function renderTransactions() {
       detailsRow.append(details); body.append(detailsRow);
     }
   });
+}
+
+function renderQuickEntryRow(body) {
+  const firstType = Object.keys(state.categoryTypes)[0];
+  const firstCategory = state.categoryTypes[firstType]?.[0];
+  const defaultCategory = firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized';
+  const row = document.createElement('tr'); row.className = 'main-row quick-entry-row';
+  row.append(inputCell('date', today(), 'edit-input quick-date'));
+  row.append(inputCell('text', '', 'edit-input quick-payee'));
+  const categoryCell = document.createElement('td');
+  categoryCell.append(categoryPickerButton(defaultCategory, value => { const picker = categoryCell.querySelector('.category-picker-trigger'); picker.dataset.category = value; picker.textContent = splitCategoryLabel(value); })); row.append(categoryCell);
+  row.append(inputCell('text', '', 'edit-input quick-tag'));
+  row.append(inputCell('text', '', 'edit-input edit-small quick-cleared'));
+  row.append(inputCell('number', '', 'edit-input quick-spend'));
+  row.append(inputCell('number', '', 'edit-input quick-receive'));
+  row.append(makeCell(money.format(0)));
+  const accountCell = document.createElement('td');
+  const account = accountSelect(selectedAccountId || state.accounts[0]?.id); account.classList.add('quick-account'); accountCell.append(account); row.append(accountCell);
+  const action = document.createElement('td'); action.className = 'transaction-actions';
+  const save = document.createElement('button'); save.type = 'button'; save.textContent = 'Add'; save.className = 'primary-btn'; save.addEventListener('click', () => saveQuickEntry(row));
+  action.append(save); row.append(action); body.append(row);
+  const memoRow = document.createElement('tr'); memoRow.className = 'memo-row quick-entry-memo';
+  const memoCell = document.createElement('td'); memoCell.colSpan = 10;
+  const memoInput = document.createElement('input'); memoInput.type = 'text'; memoInput.className = 'edit-input memo-edit quick-memo'; memoInput.placeholder = 'Memo (optional)'; memoCell.append(memoInput); memoRow.append(memoCell); body.append(memoRow);
+}
+
+async function saveQuickEntry(row) {
+  const date = row.querySelector('.quick-date').value;
+  const payee = row.querySelector('.quick-payee').value.trim();
+  const spend = amount(row.querySelector('.quick-spend').value);
+  const receive = amount(row.querySelector('.quick-receive').value);
+  const accountId = row.querySelector('.quick-account').value;
+  if (!date || !payee || (spend <= 0 && receive <= 0) || (spend > 0 && receive > 0)) {
+    setStatus('Enter a date and payee, then enter either a spend or a receive amount.', 'error'); return;
+  }
+  state.transactions.unshift({
+    id: makeId(), date, payee, category: row.querySelector('.category-picker-trigger').dataset.category || 'Uncategorized',
+    tag: row.querySelector('.quick-tag').value.trim(), memo: row.querySelector('.quick-memo').value.trim(),
+    cleared: row.querySelector('.quick-cleared').value.trim(), spend, receive, accountId, isEditing: false
+  });
+  renderTransactions(); updateUI(); await persist();
+  setStatus(`${payee} added.`, 'success');
 }
 
 function splitCategoryLabel(value) {
@@ -283,9 +379,15 @@ function removeTransaction(index) {
 }
 
 function saveRow(index, row) {
-  const fields = row.querySelectorAll('input, select');
-  const memo = row.nextElementSibling.querySelector('input');
-  const [date, payee, category, tag, cleared, spend, receive, account] = fields;
+  const date = row.querySelector('.tx-date');
+  const payee = row.querySelector('.tx-payee');
+  const category = row.querySelector('.category-picker-trigger');
+  const tag = row.querySelector('.tx-tag');
+  const cleared = row.querySelector('.tx-cleared');
+  const spend = row.querySelector('.tx-spend');
+  const receive = row.querySelector('.tx-receive');
+  const account = row.querySelector('.tx-account');
+  const memo = row.nextElementSibling.querySelector('.tx-memo');
   const paymentSource = row.querySelector('.payment-source-select');
   const outgoing = amount(spend.value), incoming = amount(receive.value);
   if (!date.value || !payee.value.trim() || (outgoing > 0 && incoming > 0) || (outgoing < 0 || incoming < 0)) {
@@ -299,15 +401,8 @@ function saveRow(index, row) {
   if (isCardPayment && (!paymentSource?.value || paymentSource.value === account.value)) {
     setStatus('Choose a different account to pay this credit card transaction from.', 'error'); return;
   }
-  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.value || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, paymentFromAccountId: isCardPayment ? paymentSource.value : null, paymentAmount: isCardPayment ? outgoing : 0, memo: memo.value.trim(), isEditing: false });
+  Object.assign(state.transactions[index], { date: date.value, payee: payee.value.trim(), category: category.dataset.category || 'Uncategorized', tag: tag.value.trim(), cleared: cleared.value.trim(), spend: outgoing, receive: incoming, accountId: account.value, paymentFromAccountId: isCardPayment ? paymentSource.value : null, paymentAmount: isCardPayment ? outgoing : 0, memo: memo.value.trim(), isEditing: false });
   renderTransactions(); updateUI(); persist();
-}
-
-function addTransaction() {
-  const firstType = Object.keys(state.categoryTypes)[0];
-  const firstCategory = state.categoryTypes[firstType]?.[0];
-  state.transactions.unshift({ id: makeId(), date: today(), payee: '', category: firstCategory ? categoryValue(firstType, firstCategory) : 'Uncategorized', tag: '', memo: '', cleared: '', spend: 0, receive: 0, accountId: selectedAccountId || state.accounts[0]?.id, isEditing: true });
-  renderTransactions();
 }
 
 function openCardPayment() {
@@ -687,7 +782,6 @@ async function start() {
   state.transactions = state.transactions.map(tx => ({ ...tx, id: tx.id || makeId(), accountId: tx.accountId || state.accounts[0]?.id, isEditing: false, spend: amount(tx.spend), receive: amount(tx.receive), paymentAmount: amount(tx.paymentAmount) }));
   showPage('dashboard');
   populateAccountSelectors(); updateUI(); renderTransactions();
-  document.getElementById('add-transaction-btn').addEventListener('click', addTransaction);
   document.getElementById('pay-credit-card-btn').addEventListener('click', openCardPayment);
   document.getElementById('card-payment-form').addEventListener('submit', saveCardPayment);
   document.getElementById('close-card-payment-btn').addEventListener('click', closeCardPayment);
@@ -725,7 +819,10 @@ async function start() {
   document.getElementById('done-categories-btn').addEventListener('click', closeCategoryManager);
   document.getElementById('category-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryManager(); });
   document.getElementById('add-category-form').addEventListener('submit', addCategory);
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCategoryManager(); closeSplitEditor(); closeCardPayment(); } });
+  document.getElementById('close-category-picker-btn').addEventListener('click', closeCategoryPicker);
+  document.getElementById('category-picker-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryPicker(); });
+  document.getElementById('add-picker-category-form').addEventListener('submit', addPickerCategory);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCategoryManager(); closeCategoryPicker(); closeSplitEditor(); closeCardPayment(); } });
   window.vault.onOpenCategoryManager(openCategoryManager);
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Ready.', 'success');

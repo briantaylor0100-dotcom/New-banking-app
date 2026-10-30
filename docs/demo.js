@@ -1,7 +1,8 @@
 const STORAGE_KEY = 'vaultcompute-demo-state';
-const state = { accounts: [], transactions: [] };
+const state = { accounts: [], transactions: [], categories: ['Account transfer', 'Groceries', 'Dining', 'Transportation', 'Shopping', 'Entertainment', 'Utilities', 'Income', 'Other'] };
 let selectedAccountId = null;
 let pendingReview = null;
+let categoryPickerCallback = null;
 
 const dashboardPage = document.getElementById('dashboard-page');
 const reportsPage = document.getElementById('reports-page');
@@ -12,7 +13,7 @@ const money = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'U
 const safeText = value => String(value ?? '');
 const amount = value => Number.isFinite(Number(value)) ? Math.round(Number(value) * 100) / 100 : 0;
 const makeId = () => Math.random().toString(36).slice(2, 11);
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
 
 function accountById(id) {
   return state.accounts.find(account => account.id === id);
@@ -69,6 +70,43 @@ function accountSelect(value) {
   return select;
 }
 
+function categoryPickerButton(value, onSelect) {
+  const button = document.createElement('button'); button.type = 'button'; button.className = 'category-picker-trigger';
+  button.dataset.category = value || ''; button.textContent = value || 'Choose category…';
+  button.addEventListener('click', () => openCategoryPicker(button.dataset.category, onSelect));
+  return button;
+}
+
+function openCategoryPicker(value, onSelect) {
+  categoryPickerCallback = onSelect;
+  const holder = document.getElementById('category-picker-options'); holder.replaceChildren();
+  state.categories.sort((a, b) => a.localeCompare(b)).forEach(category => {
+    const option = document.createElement('button'); option.type = 'button'; option.className = 'category-picker-option';
+    option.textContent = category; option.classList.toggle('selected', category === value);
+    option.addEventListener('click', () => selectPickerCategory(category)); holder.append(option);
+  });
+  document.getElementById('picker-category-name').value = '';
+  document.getElementById('category-picker-modal').hidden = false;
+}
+
+function selectPickerCategory(value) {
+  categoryPickerCallback?.(value); categoryPickerCallback = null;
+  document.getElementById('category-picker-modal').hidden = true;
+}
+
+function closeCategoryPicker() {
+  categoryPickerCallback = null; document.getElementById('category-picker-modal').hidden = true;
+}
+
+function addPickerCategory(event) {
+  event.preventDefault(); const input = document.getElementById('picker-category-name'); const category = input.value.trim();
+  if (!category) return;
+  const existing = state.categories.find(item => item.toLocaleLowerCase() === category.toLocaleLowerCase());
+  if (!existing) state.categories.push(category);
+  persist(); selectPickerCategory(existing || category);
+  setStatus(existing ? `${existing} selected.` : `${category} added to categories.`, 'success');
+}
+
 function renderAccountList(currentAccounts = balances()) {
   const list = document.getElementById('account-list');
   list.replaceChildren();
@@ -102,6 +140,7 @@ function renderAccountList(currentAccounts = balances()) {
 function renderTransactions() {
   const body = document.getElementById('transaction-body');
   body.replaceChildren();
+  renderQuickEntryRow(body);
 
   const visibleTransactions = state.transactions
     .map((tx, index) => ({ tx, index }))
@@ -120,17 +159,17 @@ function renderTransactions() {
     row.className = 'main-row';
 
     if (tx.isEditing) {
-      row.append(inputCell('date', tx.date));
-      row.append(inputCell('text', tx.payee));
-      row.append(inputCell('text', tx.category));
-      row.append(inputCell('text', tx.tag));
-      row.append(inputCell('text', tx.cleared, 'edit-input'));
-      row.append(inputCell('number', tx.spend));
-      row.append(inputCell('number', tx.receive));
+      row.append(inputCell('date', tx.date, 'edit-input tx-date'));
+      row.append(inputCell('text', tx.payee, 'edit-input tx-payee'));
+      const categoryCell = document.createElement('td'); categoryCell.append(categoryPickerButton(tx.category, value => { const picker = categoryCell.querySelector('.category-picker-trigger'); picker.dataset.category = value; picker.textContent = value; })); row.append(categoryCell);
+      row.append(inputCell('text', tx.tag, 'edit-input tx-tag'));
+      row.append(inputCell('text', tx.cleared, 'edit-input tx-cleared'));
+      row.append(inputCell('number', tx.spend, 'edit-input tx-spend'));
+      row.append(inputCell('number', tx.receive, 'edit-input tx-receive'));
       row.append(makeCell(money.format(amount(tx.receive) - amount(tx.spend))));
 
       const accountCell = document.createElement('td');
-      accountCell.appendChild(accountSelect(tx.accountId));
+      const accountInput = accountSelect(tx.accountId); accountInput.classList.add('tx-account'); accountCell.appendChild(accountInput);
       row.append(accountCell);
 
       const action = document.createElement('td');
@@ -138,7 +177,7 @@ function renderTransactions() {
       const saveBtn = document.createElement('button');
       saveBtn.type = 'button';
       saveBtn.textContent = 'Save';
-      saveBtn.addEventListener('click', () => saveRow(index));
+      saveBtn.addEventListener('click', () => saveRow(index, row));
       action.append(saveBtn, removeButton(index));
       row.append(action);
     } else {
@@ -177,7 +216,7 @@ function renderTransactions() {
       const input = document.createElement('input');
       input.type = 'text';
       input.value = safeText(tx.memo);
-      input.className = 'edit-input memo-edit';
+      input.className = 'edit-input memo-edit tx-memo';
       input.placeholder = 'Enter memo';
       memo.appendChild(input);
     } else {
@@ -186,6 +225,29 @@ function renderTransactions() {
     memoRow.appendChild(memo);
     body.append(row, memoRow);
   });
+}
+
+function renderQuickEntryRow(body) {
+  const row = document.createElement('tr'); row.className = 'main-row quick-entry-row';
+  row.append(inputCell('date', today(), 'edit-input quick-date'));
+  row.append(inputCell('text', '', 'edit-input quick-payee'));
+  const categoryCell = document.createElement('td'); categoryCell.append(categoryPickerButton(state.categories[0] || 'Uncategorized', value => { const picker = categoryCell.querySelector('.category-picker-trigger'); picker.dataset.category = value; picker.textContent = value; })); row.append(categoryCell);
+  row.append(inputCell('text', '', 'edit-input quick-tag'));
+  row.append(inputCell('text', '', 'edit-input quick-cleared'));
+  row.append(inputCell('number', '', 'edit-input quick-spend'));
+  row.append(inputCell('number', '', 'edit-input quick-receive'));
+  row.append(makeCell(money.format(0)));
+  const accountCell = document.createElement('td'); const account = accountSelect(selectedAccountId || state.accounts[0]?.id); account.classList.add('quick-account'); accountCell.append(account); row.append(accountCell);
+  const action = document.createElement('td'); action.className = 'transaction-actions'; const add = document.createElement('button'); add.type = 'button'; add.className = 'primary-btn'; add.textContent = 'Add'; add.addEventListener('click', () => saveQuickEntry(row)); action.append(add); row.append(action); body.append(row);
+  const memoRow = document.createElement('tr'); memoRow.className = 'memo-row quick-entry-memo'; const memoCell = document.createElement('td'); memoCell.colSpan = 10; const memo = document.createElement('input'); memo.type = 'text'; memo.className = 'edit-input memo-edit quick-memo'; memo.placeholder = 'Memo (optional)'; memoCell.append(memo); memoRow.append(memoCell); body.append(memoRow);
+}
+
+function saveQuickEntry(row) {
+  const date = row.querySelector('.quick-date').value, payee = row.querySelector('.quick-payee').value.trim();
+  const spend = amount(row.querySelector('.quick-spend').value), receive = amount(row.querySelector('.quick-receive').value);
+  if (!date || !payee || (spend <= 0 && receive <= 0) || (spend > 0 && receive > 0)) return setStatus('Enter a date and payee, then enter either spend or receive.', 'error');
+  state.transactions.unshift({ id: makeId(), date, payee, category: row.querySelector('.category-picker-trigger').dataset.category || 'Uncategorized', tag: row.querySelector('.quick-tag').value.trim(), memo: row.querySelector('.quick-memo').value.trim(), cleared: row.querySelector('.quick-cleared').value.trim(), spend, receive, accountId: row.querySelector('.quick-account').value, isEditing: false });
+  renderTransactions(); updateUI(); persist(); setStatus(`${payee} added.`, 'success');
 }
 
 function removeButton(index) {
@@ -206,11 +268,12 @@ function removeTransaction(index) {
   persist();
 }
 
-function saveRow(index) {
-  const rows = document.querySelectorAll('#transaction-body .main-row');
-  const fields = rows[index].querySelectorAll('input, select');
-  const memo = document.querySelectorAll('#transaction-body .memo-row input')[index];
-  const [date, payee, category, tag, cleared, spend, receive, account] = fields;
+function saveRow(index, row) {
+  const date = row.querySelector('.tx-date'), payee = row.querySelector('.tx-payee');
+  const category = row.querySelector('.category-picker-trigger'), tag = row.querySelector('.tx-tag');
+  const cleared = row.querySelector('.tx-cleared'), spend = row.querySelector('.tx-spend');
+  const receive = row.querySelector('.tx-receive'), account = row.querySelector('.tx-account');
+  const memo = row.nextElementSibling.querySelector('.tx-memo');
   const outgoing = amount(spend.value);
   const incoming = amount(receive.value);
 
@@ -222,36 +285,19 @@ function saveRow(index) {
   Object.assign(state.transactions[index], {
     date: date.value,
     payee: payee.value.trim(),
-    category: category.value.trim() || 'Uncategorized',
+    category: category.dataset.category || 'Uncategorized',
     tag: tag.value.trim(),
     cleared: cleared.value.trim(),
     spend: outgoing,
     receive: incoming,
     accountId: account.value,
-    memo: memo ? memo.value.trim() : '',
+    memo: memo.value.trim(),
     isEditing: false,
   });
 
   renderTransactions();
   updateUI();
   persist();
-}
-
-function addTransaction() {
-  state.transactions.unshift({
-    id: makeId(),
-    date: today(),
-    payee: '',
-    category: 'Uncategorized',
-    tag: '',
-    memo: '',
-    cleared: 'c',
-    spend: 0,
-    receive: 0,
-    accountId: selectedAccountId || state.accounts[0]?.id,
-    isEditing: true,
-  });
-  renderTransactions();
 }
 
 function showAddAccountForm() {
@@ -490,6 +536,7 @@ function bootstrapSampleData() {
     const parsed = JSON.parse(saved);
     state.accounts = Array.isArray(parsed.accounts) ? parsed.accounts : [];
     state.transactions = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+    state.categories = Array.isArray(parsed.categories) ? parsed.categories : state.categories;
     return;
   }
 
@@ -517,7 +564,6 @@ function initDemo() {
   updateUI();
   renderTransactions();
 
-  document.getElementById('add-transaction-btn').addEventListener('click', addTransaction);
   document.getElementById('pay-credit-card-btn').addEventListener('click', openCardPayment);
   document.getElementById('card-payment-form').addEventListener('submit', saveCardPayment);
   document.getElementById('close-card-payment-btn').addEventListener('click', closeCardPayment);
@@ -541,12 +587,15 @@ function initDemo() {
   document.getElementById('save-import-review-btn').addEventListener('click', saveDemoImport);
   document.getElementById('cancel-import-review-btn').addEventListener('click', () => { pendingReview = null; document.getElementById('import-review-panel').hidden = true; });
   document.getElementById('reverse-import-amounts').addEventListener('change', reverseDemoImportAmounts);
+  document.getElementById('close-category-picker-btn').addEventListener('click', closeCategoryPicker);
+  document.getElementById('category-picker-modal').addEventListener('click', event => { if (event.target === event.currentTarget) closeCategoryPicker(); });
+  document.getElementById('add-picker-category-form').addEventListener('submit', addPickerCategory);
   document.getElementById('import-account').addEventListener('change', () => {
     if (!pendingReview) return;
     const account = accountById(document.getElementById('import-account').value);
     document.getElementById('import-review-summary').textContent = `${pendingReview.fileName} · ${pendingReview.parsed.length} transactions · Account: ${account?.name || 'not selected'}`;
   });
-  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeCardPayment(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') { closeCardPayment(); closeCategoryPicker(); } });
   navItems.forEach(item => item.addEventListener('click', () => showPage(item.dataset.page)));
   setStatus('Demo ready.', 'success');
 }
